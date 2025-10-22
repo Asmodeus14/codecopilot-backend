@@ -1,0 +1,9 @@
+services:
+  - type: web
+    name: codecopilot-backend
+    env: python
+    buildCommand: pip install -r requirements.txt
+    startCommand: python app.py
+    envVars:
+      - key: GEMINI_API_KEY
+        value: AIzaSyCp0dU503LNbt2Z6BJk-FJdysQ17OPxSqQ
