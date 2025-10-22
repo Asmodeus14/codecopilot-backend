@@ -48,11 +48,7 @@ limiter = Limiter(
 
 # CORS configuration
 CORS(app, origins=[
-    "http://localhost:5173",
-    "http://localhost:3000", 
-    "https://codecopilot.netlify.app",
-    "https://*.netlify.app",
-    "https://*.vercel.app"
+    "codecopilot0.vercel.app"
 ])
 
 # Initialize Gemini if available with better error handling
