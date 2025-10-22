@@ -48,7 +48,7 @@ limiter = Limiter(
 
 # CORS configuration
 CORS(app, origins=[
-    "codecopilot0.vercel.app"
+    "https://codecopilot0.vercel.app"
 ])
 
 # Initialize Gemini if available with better error handling
