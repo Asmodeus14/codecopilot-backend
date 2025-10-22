@@ -1,9 +1,6 @@
-# CodeCopilot Backend - Production Dependencies
 Flask==2.3.3
-Werkzeug==2.3.7
 Flask-CORS==4.0.0
 Flask-Limiter==3.3.0
 python-dotenv==1.0.0
 google-generativeai==0.3.0
-Pillow==10.0.1
 gunicorn==21.2.0
