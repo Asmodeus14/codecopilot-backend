@@ -72,7 +72,7 @@ if GEMINI_API_KEY and GEMINI_AVAILABLE:
         
         # Try different model names
         model_names = [
-            "gemini-2.0-flash-exp",
+            "gemini-2.0-flash",
             "gemini-1.5-flash",
             "gemini-1.5-pro",
             "gemini-pro",
