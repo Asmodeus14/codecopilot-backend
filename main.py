@@ -29,9 +29,8 @@ except ImportError:
 # Load environment variables
 load_dotenv()
 
-# 🚀 PERFORMANCE CONSTANTS
-MAX_FILE_SIZE = 150 * 1024 * 1024  # 150MB
-MAX_EXTRACTED_SIZE = 500 * 1024 * 1024  # 500MB
+# 🚀 REMOVE upload size limit - we'll handle size checking after processing
+MAX_EXTRACTED_SIZE = 150 * 1024 * 1024  # 150MB after cleaning
 MAX_FILE_COUNT = 30000
 MAX_COMPRESSION_RATIO = 100
 MAX_DEPTH = 20
@@ -45,7 +44,7 @@ EARLY_RETURN_CRITICAL_ISSUES = 5
 app = Flask(__name__)
 app.config.update(
     SECRET_KEY=os.getenv('SECRET_KEY', 'dev-secret-key-change-in-production'),
-    MAX_CONTENT_LENGTH=MAX_FILE_SIZE,
+    # REMOVED: MAX_CONTENT_LENGTH - we accept any size and handle it ourselves
 )
 
 # Security middleware
@@ -112,8 +111,8 @@ VULNERABLE_PATTERNS = {
     'webpack': '<5.24.0',
 }
 
-# 🚀 SKIP PATHS
-SKIP_PATHS = {
+# 🚀 DIRECTORIES TO REMOVE IN BACKEND
+DIRECTORIES_TO_REMOVE = {
     'node_modules', '.git', 'dist', 'build', '.next', '.nuxt',
     'out', '.output', 'coverage', '.cache', '__pycache__',
     '.vscode', '.idea', 'tmp', 'temp', 'logs',
@@ -121,27 +120,187 @@ SKIP_PATHS = {
     '.parcel-cache', '.eslintcache', '.tsbuildinfo'
 }
 
-class PermissiveSecurityScanner:
-    """Security scanner that NEVER blocks analysis - only skips dangerous files"""
+# 🚀 FILE EXTENSIONS TO REMOVE (non-essential for code analysis)
+NON_ESSENTIAL_EXTENSIONS = {
+    # Executables
+    '.exe', '.dll', '.so', '.dylib', '.bat', '.cmd', '.ps1',
+    '.sh', '.scr', '.com', '.pif', '.msi', '.jar', '.war', '.apk',
+    # Archives
+    '.zip', '.rar', '.7z', '.tar', '.gz', '.bz2', '.xz',
+    # Media files
+    '.jpg', '.jpeg', '.png', '.gif', '.bmp', '.tiff', '.webp',
+    '.mp4', '.avi', '.mov', '.wmv', '.flv', '.webm',
+    '.mp3', '.wav', '.ogg', '.flac',
+    # Documents
+    '.pdf', '.doc', '.docx', '.ppt', '.pptx',
+    # Fonts
+    '.woff', '.woff2', '.ttf', '.eot', '.otf',
+    '.ico', '.icns'
+}
+
+# 🚀 ESSENTIAL FILES TO KEEP (even if in removed directories)
+ESSENTIAL_FILES = {
+    'package.json', 'package-lock.json', 'yarn.lock', 'pnpm-lock.yaml',
+    '.env', '.env.example', '.env.local', '.env.production',
+    'tsconfig.json', 'webpack.config.js', 'vite.config.js', 'vite.config.ts',
+    'rollup.config.js', 'dockerfile', 'docker-compose.yml',
+    '.eslintrc', '.prettierrc', '.babelrc', 'jest.config.js'
+}
+
+class BackendFileCleaner:
+    """Handles file cleaning and size checking in the backend"""
     
-    # 🚨 ONLY skip truly dangerous executable files
-    DANGEROUS_EXTENSIONS = {
-        '.exe', '.dll', '.so', '.dylib', '.bat', '.cmd', '.ps1',
-        '.sh', '.scr', '.com', '.pif', '.msi', '.jar', '.war', '.apk'
-    }
+    def __init__(self):
+        self.cleaned_files_count = 0
+        self.cleaned_size = 0
+        self.removed_directories = []
+        self.removed_files = []
+    
+    def clean_and_check_size(self, extract_path: Path) -> Dict:
+        """Remove non-essential files and check if cleaned size is under limit"""
+        self.cleaned_files_count = 0
+        self.cleaned_size = 0
+        self.removed_directories = []
+        self.removed_files = []
+        
+        try:
+            # First pass: Remove entire directories we don't need
+            self._remove_non_essential_directories(extract_path)
+            
+            # Second pass: Remove non-essential files but keep essential ones
+            self._remove_non_essential_files(extract_path)
+            
+            # Calculate cleaned size
+            self._calculate_cleaned_size(extract_path)
+            
+            # Check if cleaned size is within limits
+            if self.cleaned_size > MAX_EXTRACTED_SIZE:
+                return {
+                    "success": False,
+                    "error": f"Project too large after cleaning. Cleaned size: {self.cleaned_size // (1024*1024)}MB, Limit: {MAX_EXTRACTED_SIZE // (1024*1024)}MB",
+                    "cleaned_size_mb": self.cleaned_size // (1024*1024),
+                    "max_size_mb": MAX_EXTRACTED_SIZE // (1024*1024),
+                    "files_kept": self.cleaned_files_count,
+                    "directories_removed": len(self.removed_directories),
+                    "files_removed": len(self.removed_files)
+                }
+            
+            return {
+                "success": True,
+                "cleaned_size": self.cleaned_size,
+                "cleaned_files_count": self.cleaned_files_count,
+                "removed_directories": self.removed_directories[:10],  # Sample
+                "removed_files_sample": self.removed_files[:20],  # Sample
+                "cleaned_size_mb": self.cleaned_size // (1024*1024)
+            }
+            
+        except Exception as e:
+            return {
+                "success": False,
+                "error": f"Cleaning failed: {str(e)}"
+            }
+    
+    def _remove_non_essential_directories(self, extract_path: Path):
+        """Remove entire directories that are not needed for analysis"""
+        for item in extract_path.iterdir():
+            if item.is_dir() and item.name in DIRECTORIES_TO_REMOVE:
+                try:
+                    # Extract essential files from these directories first
+                    self._extract_essential_files_from_directory(item, extract_path)
+                    
+                    # Then remove the directory
+                    shutil.rmtree(item, ignore_errors=True)
+                    self.removed_directories.append(item.name)
+                    print(f"🗑️ Removed directory: {item.name}")
+                except Exception as e:
+                    print(f"⚠️ Failed to remove directory {item}: {e}")
+    
+    def _extract_essential_files_from_directory(self, directory: Path, extract_path: Path):
+        """Extract essential config files from directories we're about to remove"""
+        try:
+            for essential_file in ESSENTIAL_FILES:
+                # Look for essential files in this directory
+                for file_path in directory.rglob(essential_file):
+                    try:
+                        # Calculate relative path from the directory
+                        relative_path = file_path.relative_to(directory)
+                        # Create new path in root extract directory
+                        new_path = extract_path / f"extracted_{directory.name}_{relative_path}"
+                        new_path.parent.mkdir(parents=True, exist_ok=True)
+                        
+                        # Copy the file
+                        shutil.copy2(file_path, new_path)
+                        print(f"📄 Extracted essential file: {file_path} -> {new_path}")
+                    except Exception as e:
+                        print(f"⚠️ Failed to extract {file_path}: {e}")
+        except Exception as e:
+            print(f"⚠️ Error extracting essential files from {directory}: {e}")
+    
+    def _remove_non_essential_files(self, extract_path: Path):
+        """Remove non-essential files but keep source code and configs"""
+        try:
+            for file_path in extract_path.rglob('*'):
+                if not file_path.is_file():
+                    continue
+                
+                file_ext = file_path.suffix.lower()
+                file_name = file_path.name
+                
+                # Keep essential files regardless of location
+                if file_name in ESSENTIAL_FILES:
+                    continue
+                
+                # Keep source code files
+                if file_ext in {'.js', '.jsx', '.ts', '.tsx', '.vue', '.svelte', '.html', '.css', '.scss', '.sass', '.less'}:
+                    continue
+                
+                # Keep config files
+                if file_ext in {'.json', '.yml', '.yaml', '.config.js', '.config.ts', '.env'}:
+                    continue
+                
+                # Keep documentation
+                if file_ext in {'.md', '.txt', '.rst'}:
+                    continue
+                
+                # Remove non-essential files
+                if file_ext in NON_ESSENTIAL_EXTENSIONS:
+                    try:
+                        file_path.unlink()
+                        self.removed_files.append(str(file_path.relative_to(extract_path)))
+                    except Exception as e:
+                        print(f"⚠️ Failed to remove {file_path}: {e}")
+                        
+        except Exception as e:
+            print(f"⚠️ Error removing non-essential files: {e}")
+    
+    def _calculate_cleaned_size(self, extract_path: Path):
+        """Calculate total size of remaining files after cleaning"""
+        self.cleaned_files_count = 0
+        self.cleaned_size = 0
+        
+        try:
+            for file_path in extract_path.rglob('*'):
+                if file_path.is_file():
+                    try:
+                        file_size = file_path.stat().st_size
+                        self.cleaned_size += file_size
+                        self.cleaned_files_count += 1
+                    except Exception:
+                        continue
+        except Exception as e:
+            print(f"⚠️ Error calculating cleaned size: {e}")
+
+class PermissiveSecurityScanner:
+    """Security scanner that focuses on safe extraction"""
     
     def __init__(self):
         self.skipped_files = []
         self.warned_files = []
-        self.extracted_files_count = 0
-        self.extracted_size = 0
     
-    def validate_and_extract_zip(self, zip_path: Path, extract_path: Path) -> Dict:
-        """ALWAYS returns valid=True and extracts what it can"""
+    def safe_extract_zip(self, zip_path: Path, extract_path: Path) -> Dict:
+        """Safely extract ZIP file without blocking"""
         self.skipped_files = []
         self.warned_files = []
-        self.extracted_files_count = 0
-        self.extracted_size = 0
         
         try:
             # Basic ZIP validation
@@ -160,68 +319,49 @@ class PermissiveSecurityScanner:
             
             extract_path.mkdir(parents=True, exist_ok=True)
             
-            # 🎯 PERMISSIVE EXTRACTION - extract everything safe
-            return self._permissive_extract_files(zip_path, extract_path)
+            return self._safe_extract_all_files(zip_path, extract_path)
                 
         except Exception as e:
-            return {"valid": False, "error": f"Failed to process file: {str(e)}"}
-
-    def _permissive_extract_files(self, zip_path: Path, extract_path: Path) -> Dict:
-        """Extract files permissively, only skipping truly dangerous ones"""
+            return {"valid": False, "error": f"Failed to extract file: {str(e)}"}
+    
+    def _safe_extract_all_files(self, zip_path: Path, extract_path: Path) -> Dict:
+        """Extract all files safely - we'll clean them afterwards"""
+        extracted_files = 0
+        extracted_size = 0
+        
         try:
             with zipfile.ZipFile(zip_path, 'r') as zip_ref:
                 file_infos = list(zip_ref.infolist())
                 
                 for file_info in file_infos:
-                    file_path = Path(file_info.filename)
-                    file_ext = file_path.suffix.lower()
-                    
-                    # 🚨 Skip only truly dangerous files
-                    if file_ext in self.DANGEROUS_EXTENSIONS:
-                        self.skipped_files.append(f"DANGEROUS: {file_info.filename}")
-                        continue
-                    
-                    # Skip files in unwanted directories
-                    if any(skip_dir in file_info.filename for skip_dir in SKIP_PATHS):
-                        self.skipped_files.append(f"SKIPPED_DIR: {file_info.filename}")
-                        continue
-                    
-                    # 🎯 Extract all other files
                     try:
-                        # Sanitize filename but don't block
+                        # Basic path sanitization
                         safe_filename = self._sanitize_filename(file_info.filename)
+                        if safe_filename != file_info.filename:
+                            self.warned_files.append(f"Sanitized: {file_info.filename}")
                         
+                        # Extract the file
                         zip_ref.extract(file_info, extract_path)
-                        self.extracted_files_count += 1
-                        self.extracted_size += file_info.file_size
+                        extracted_files += 1
+                        extracted_size += file_info.file_size
                         
-                        # Warn but don't stop for large extractions
-                        if self.extracted_size > MAX_EXTRACTED_SIZE:
-                            self.warned_files.append("Reached size limit - some files not extracted")
-                            break
-                            
-                        if self.extracted_files_count > MAX_FILE_COUNT:
-                            self.warned_files.append("Reached file count limit - some files not extracted")
-                            break
-                            
                     except Exception as e:
                         self.skipped_files.append(f"EXTRACTION_ERROR: {file_info.filename} - {str(e)}")
                         continue
                 
                 return {
                     "valid": True,
-                    "extracted_files": self.extracted_files_count,
-                    "extracted_size": self.extracted_size,
-                    "skipped_files_count": len(self.skipped_files),
-                    "warnings": self.warned_files[:10],
-                    "skipped_files_sample": self.skipped_files[:20]
+                    "extracted_files": extracted_files,
+                    "extracted_size": extracted_size,
+                    "warnings": self.warned_files[:5],
+                    "skipped_files": self.skipped_files[:10]
                 }
                 
         except Exception as e:
             return {"valid": False, "error": f"Extraction failed: {str(e)}"}
-
+    
     def _sanitize_filename(self, filename: str) -> str:
-        """Sanitize filename but don't block"""
+        """Sanitize filename to prevent path traversal"""
         sanitized = re.sub(r'\.\./|\.\.\\', '', filename)
         sanitized = re.sub(r'^/+|^\\+', '', sanitized)
         return sanitized
@@ -232,7 +372,7 @@ class PermissiveSecurityScanner:
         return re.sub(r'[^a-zA-Z0-9_.-]', '_', filename)
 
 class ComprehensiveLLMAnalyzer:
-    """Comprehensive LLM analyzer with all features"""
+    """LLM analyzer for enhanced issue analysis"""
     
     def __init__(self):
         self.enabled = LLM_ENABLED and gemini_model is not None
@@ -242,8 +382,7 @@ class ComprehensiveLLMAnalyzer:
         if not self.enabled or not issues:
             return issues
         
-        # Analyze critical and high-impact issues
-        critical_issues = [issue for issue in issues if issue.get('severity') in ['high', 'medium']][:5]
+        critical_issues = [issue for issue in issues if issue.get('severity') in ['high', 'medium']][:3]
         
         if not critical_issues:
             return issues
@@ -272,7 +411,7 @@ class ComprehensiveLLMAnalyzer:
             return issues
 
     async def analyze_issue_with_llm(self, issue: Dict, code_context: str = "") -> Dict:
-        """Comprehensive single issue analysis"""
+        """Single issue analysis with LLM"""
         if not self.enabled:
             return issue
         
@@ -297,27 +436,24 @@ class ComprehensiveLLMAnalyzer:
             return issue
     
     def _build_analysis_prompt(self, issue: Dict, code_context: str) -> str:
-        """Build comprehensive analysis prompt"""
+        """Build analysis prompt"""
         return f"""
-        As an expert software engineer, analyze this code issue and provide detailed solutions.
+        As an expert software engineer, analyze this code issue:
 
-        ISSUE:
-        - Title: {issue['title']}
-        - Description: {issue['description']}
-        - Category: {issue['category']}
-        - File: {issue.get('file', 'N/A')}
-        - Severity: {issue.get('severity', 'medium')}
+        ISSUE: {issue['title']}
+        DESCRIPTION: {issue['description']}
+        CATEGORY: {issue['category']}
+        SEVERITY: {issue.get('severity', 'medium')}
 
         CODE CONTEXT:
         {code_context[:2000] if code_context else 'No specific code context provided'}
 
-        Please provide:
-        1. Root cause analysis (1-2 paragraphs)
-        2. Step-by-step solution with code examples if applicable
-        3. Best practices to prevent this issue
-        4. Alternative solutions if any
+        Provide:
+        1. Root cause analysis
+        2. Step-by-step solution
+        3. Best practices to prevent this
 
-        Keep responses practical and actionable.
+        Keep it practical and actionable.
         """
 
     async def _get_llm_response(self, prompt: str) -> str:
@@ -333,88 +469,53 @@ class ComprehensiveLLMAnalyzer:
             return ""
 
     def _parse_llm_response(self, issue: Dict, llm_response: str) -> Dict:
-        """Parse LLM response comprehensively"""
+        """Parse LLM response"""
         if not llm_response.strip():
             return issue
         
-        # Simple parsing - use sections if detectable
-        lines = llm_response.strip().split('\n')
-        root_cause = ""
-        detailed_solution = ""
-        prevention = ""
-        
-        current_section = ""
-        for line in lines:
-            line_lower = line.lower()
-            if 'root cause' in line_lower:
-                current_section = 'root_cause'
-                root_cause = line.split(':', 1)[-1].strip() if ':' in line else ""
-            elif 'solution' in line_lower or 'step' in line_lower:
-                current_section = 'solution'
-                if not detailed_solution:
-                    detailed_solution = line.split(':', 1)[-1].strip() if ':' in line else line
-                else:
-                    detailed_solution += "\n" + line
-            elif 'prevention' in line_lower or 'prevent' in line_lower:
-                current_section = 'prevention'
-                prevention = line.split(':', 1)[-1].strip() if ':' in line else line
-            else:
-                if current_section == 'root_cause':
-                    root_cause += " " + line.strip()
-                elif current_section == 'solution':
-                    detailed_solution += "\n" + line
-                elif current_section == 'prevention':
-                    prevention += " " + line.strip()
-        
-        # If we couldn't parse sections, use the whole response as detailed solution
-        if not detailed_solution:
-            detailed_solution = llm_response.strip()
-        
         issue.update({
             "llm_enhanced": True,
-            "detailed_solution": detailed_solution[:2000],
-            "root_cause": root_cause[:500] if root_cause else "AI analysis provided",
-            "prevention": prevention[:500] if prevention else "See detailed solution above",
+            "detailed_solution": llm_response.strip()[:1500],
+            "root_cause": "AI analysis provided",
+            "prevention": "See solution above",
             "ai_analyzed": True
         })
         
         return issue
 
 class ComprehensiveProjectAnalyzer:
-    """Comprehensive project analyzer with ALL functionality"""
+    """Comprehensive project analyzer with backend file cleaning"""
     
     def __init__(self):
         self.issues = []
         self.project_stats = self._init_project_stats()
         self.security_scanner = PermissiveSecurityScanner()
+        self.file_cleaner = BackendFileCleaner()
         self.llm_analyzer = ComprehensiveLLMAnalyzer()
         self._critical_issue_count = 0
         self._files_scanned = 0
     
     def _init_project_stats(self):
-        """Initialize comprehensive project stats"""
+        """Initialize project stats"""
         return {
             "total_files": 0, "package_files": 0, "config_files": 0,
             "large_project": False, "node_modules_detected": False,
             "skipped_files": 0, "security_warnings": [],
+            "cleaning_stats": {},
             "security_scan": {"vulnerable_deps": 0, "secrets_found": 0, "misconfigurations": 0},
             "code_quality": {"eslint_issues": 0, "typescript_issues": 0, "testing_issues": 0},
             "deployment": {"build_issues": 0, "config_issues": 0},
             "performance": {"scan_duration": 0, "files_processed": 0, "early_termination": False},
-            "advanced_metrics": {
-                "code_complexity": {"high_complexity_files": 0, "most_complex_files": []},
-                "performance_issues": 0,
-                "accessibility_issues": 0,
-                "architecture_issues": 0,
-                "code_metrics": {},
-                "ci_cd_issues": 0
-            },
-            "tech_stack": {"frontend": [], "backend": [], "build_tools": [], "testing": []},
-            "size_analysis": {}
+            "package_analysis": {
+                "version_mismatches": [],
+                "vulnerable_dependencies": [],
+                "peer_dependency_issues": [],
+                "multiple_lock_files": False
+            }
         }
     
     async def analyze_project(self, zip_path: Path) -> Dict:
-        """Comprehensive project analysis - NEVER fails completely"""
+        """Analyze project with backend file cleaning"""
         start_time = datetime.now()
         self.issues = []
         self.project_stats = self._init_project_stats()
@@ -424,26 +525,34 @@ class ComprehensiveProjectAnalyzer:
         extract_path = Path(tempfile.mkdtemp(prefix="codecopilot_"))
         
         try:
-            # 🎯 ALWAYS EXTRACT - never block
-            extract_result = self.security_scanner.validate_and_extract_zip(zip_path, extract_path)
+            # Step 1: Extract the ZIP file (accept any size)
+            extract_result = self.security_scanner.safe_extract_zip(zip_path, extract_path)
             
             if not extract_result["valid"]:
-                # Even if extraction fails, return basic analysis
                 return self._get_fallback_analysis(extract_result["error"])
             
-            # Update stats from extraction
-            self.project_stats["skipped_files"] = extract_result.get("skipped_files_count", 0)
-            if extract_result.get("warnings"):
-                self.project_stats["security_warnings"].extend(extract_result["warnings"])
+            # Step 2: Clean files in backend (remove node_modules, etc.)
+            cleaning_result = self.file_cleaner.clean_and_check_size(extract_path)
             
-            # 🎯 COMPREHENSIVE ANALYSIS
+            if not cleaning_result["success"]:
+                return self._get_size_exceeded_analysis(cleaning_result)
+            
+            # Add cleaning stats to project stats
+            self.project_stats["cleaning_stats"] = {
+                "cleaned_size_mb": cleaning_result["cleaned_size_mb"],
+                "files_kept": cleaning_result["cleaned_files_count"],
+                "directories_removed": len(cleaning_result["removed_directories"]),
+                "files_removed_sample": cleaning_result["removed_files_sample"]
+            }
+            
+            # Step 3: Perform comprehensive analysis on cleaned files
             await self._comprehensive_analysis(extract_path)
             
             # Project classification
             if self.project_stats["total_files"] > 1000:
                 self.project_stats["large_project"] = True
             
-            # Early termination only for performance, not errors
+            # Early termination for performance
             if self._critical_issue_count >= EARLY_RETURN_CRITICAL_ISSUES:
                 self.project_stats["performance"]["early_termination"] = True
                 self._add_issue(
@@ -454,7 +563,7 @@ class ComprehensiveProjectAnalyzer:
                     severity="low"
                 )
             
-            # 🧠 LLM Enhancement
+            # LLM Enhancement
             llm_was_used = False
             if self.llm_analyzer.enabled and self.issues:
                 llm_was_used = await self._enhance_issues_with_llm(extract_path)
@@ -472,29 +581,60 @@ class ComprehensiveProjectAnalyzer:
                 "project_stats": self.project_stats,
                 "llm_enhanced": llm_was_used,
                 "llm_available": self.llm_analyzer.enabled,
+                "backend_cleaning": True,
                 "performance": {
                     "total_duration_seconds": round(duration, 2),
                     "issues_found": len(self.issues),
                     "early_termination": self.project_stats["performance"]["early_termination"],
                     "files_processed": self._files_scanned,
-                    "critical_issues_found": self._critical_issue_count
+                    "critical_issues_found": self._critical_issue_count,
+                    "cleaned_size_mb": cleaning_result["cleaned_size_mb"]
                 }
             }
             
         except Exception as e:
-            # 🎯 NEVER FAIL - return error analysis
             return self._get_error_analysis(str(e))
         finally:
             await self._cleanup_directory(extract_path)
     
+    def _get_size_exceeded_analysis(self, cleaning_result: Dict) -> Dict:
+        """Return analysis when cleaned size exceeds limit"""
+        self._add_issue(
+            title="Project Too Large After Cleaning",
+            description=f"Project size after removing non-essential files: {cleaning_result['cleaned_size_mb']}MB (Limit: {MAX_EXTRACTED_SIZE // (1024*1024)}MB)",
+            category="system",
+            severity="medium",
+            solution=f"Remove more files manually or split your project. We kept {cleaning_result['files_kept']} files after cleaning."
+        )
+        
+        return {
+            "timestamp": datetime.now().isoformat(),
+            "issues": self.issues,
+            "health_score": 40,
+            "summary": self._generate_summary(),
+            "project_stats": {
+                "cleaning_stats": cleaning_result,
+                "size_exceeded": True
+            },
+            "llm_enhanced": False,
+            "llm_available": self.llm_analyzer.enabled,
+            "backend_cleaning": True,
+            "performance": {
+                "total_duration_seconds": 0,
+                "issues_found": len(self.issues),
+                "analysis_complete": False,
+                "size_exceeded": True
+            }
+        }
+    
     def _get_fallback_analysis(self, error: str) -> Dict:
-        """Return analysis even when extraction fails"""
+        """Return analysis when extraction fails"""
         self._add_issue(
             title="Project Extraction Issue",
             description=f"Could not extract project: {error}",
             category="system",
             severity="medium",
-            solution="Try creating a new ZIP file with only your source code"
+            solution="Try creating a new ZIP file or check the file integrity"
         )
         
         return {
@@ -538,55 +678,37 @@ class ComprehensiveProjectAnalyzer:
         }
     
     async def _comprehensive_analysis(self, extract_path: Path):
-        """Run ALL analysis tasks"""
-        # Core analysis tasks
+        """Run comprehensive analysis on cleaned files"""
         await self._analyze_project_structure(extract_path)
-        await self._analyze_package_files(extract_path)
+        await self._analyze_package_ecosystem(extract_path)
         await self._analyze_security(extract_path)
         await self._analyze_code_quality(extract_path)
         await self._analyze_deployment(extract_path)
-        await self._analyze_tech_stack(extract_path)
         
-        # Advanced analysis (for reasonable-sized projects)
+        # Advanced analysis for reasonable-sized projects
         if self.project_stats["total_files"] < 5000:
-            await self._analyze_dependencies(extract_path)
             await self._analyze_code_complexity(extract_path)
             await self._analyze_performance(extract_path)
-            await self._analyze_accessibility(extract_path)
-            await self._analyze_architecture(extract_path)
-            await self._analyze_ci_cd(extract_path)
     
     async def _analyze_project_structure(self, extract_path: Path):
-        """Analyze project structure and file counts"""
+        """Analyze project structure"""
         file_count = 0
-        node_modules_detected = False
         
         try:
             for root, dirs, files in os.walk(extract_path):
-                # Skip unwanted directories
-                dirs[:] = [d for d in dirs if d not in SKIP_PATHS]
-                
-                if 'node_modules' in root:
-                    node_modules_detected = True
-                    dirs.clear()
-                    continue
-                    
                 file_count += len(files)
-                
                 if file_count > MAX_SCAN_FILES:
                     break
             
             self.project_stats["total_files"] = file_count
-            self.project_stats["node_modules_detected"] = node_modules_detected
             self._files_scanned = file_count
             
         except Exception as e:
             print(f"Error analyzing project structure: {e}")
     
-    async def _analyze_package_files(self, extract_path: Path):
-        """Analyze package.json files"""
+    async def _analyze_package_ecosystem(self, extract_path: Path):
+        """Enhanced package analysis"""
         package_files = list(extract_path.rglob('package.json'))
-        package_files = [pf for pf in package_files if 'node_modules' not in str(pf)]
         
         if not package_files:
             self._add_issue(
@@ -600,42 +722,34 @@ class ComprehensiveProjectAnalyzer:
         
         self.project_stats["package_files"] = len(package_files)
         
-        for package_file in package_files[:3]:  # Analyze first 3 packages
+        for package_file in package_files[:3]:
             try:
                 with open(package_file, 'r', encoding='utf-8') as f:
                     package_data = json.load(f)
                 
-                self._analyze_package_data(package_data, package_file)
+                self._analyze_package_comprehensive(package_data, package_file)
                 
-            except json.JSONDecodeError as e:
-                self._add_issue(
-                    title="Invalid package.json",
-                    description=f"package.json contains invalid JSON: {str(e)}",
-                    category="dependencies",
-                    file=str(package_file.relative_to(extract_path)),
-                    severity="high"
-                )
             except Exception as e:
                 print(f"Error analyzing package.json: {e}")
     
-    def _analyze_package_data(self, package_data: Dict, package_file: Path):
-        """Comprehensive package.json analysis"""
+    def _analyze_package_comprehensive(self, package_data: Dict, package_file: Path):
+        """Comprehensive package analysis"""
         dependencies = {**package_data.get('dependencies', {}), **package_data.get('devDependencies', {})}
         
-        # Check dependency versions
+        # Check version mismatches
         self._check_dependency_versions(dependencies, package_file)
+        
+        # Check vulnerable dependencies
+        self._check_vulnerable_dependencies(dependencies, package_file)
         
         # Check scripts
         self._check_package_scripts(package_data, package_file)
-        
-        # Check engines
-        self._check_engines(package_data, package_file)
         
         # Check peer dependencies
         self._check_peer_dependencies(package_data, package_file)
     
     def _check_dependency_versions(self, dependencies: Dict, package_file: Path):
-        """Check dependency version issues"""
+        """Check for version mismatches"""
         # React version consistency
         if 'react' in dependencies and 'react-dom' in dependencies:
             react_version = dependencies['react']
@@ -644,12 +758,17 @@ class ComprehensiveProjectAnalyzer:
             if react_version != react_dom_version:
                 self._add_issue(
                     title="React Version Mismatch",
-                    description=f"React version ({react_version}) doesn't match ReactDOM version ({react_dom_version})",
+                    description=f"React ({react_version}) and ReactDOM ({react_dom_version}) versions don't match",
                     category="dependencies",
                     file=str(package_file.relative_to(package_file.parent.parent)),
-                    severity="medium",
-                    solution="Ensure react and react-dom versions match for compatibility"
+                    severity="high",
+                    solution="Ensure react and react-dom versions match exactly"
                 )
+                self.project_stats["package_analysis"]["version_mismatches"].append({
+                    "type": "react_mismatch",
+                    "packages": ["react", "react-dom"],
+                    "versions": [react_version, react_dom_version]
+                })
         
         # Socket.io version consistency
         if 'socket.io' in dependencies and 'socket.io-client' in dependencies:
@@ -659,15 +778,40 @@ class ComprehensiveProjectAnalyzer:
             if server_version != client_version:
                 self._add_issue(
                     title="Socket.io Version Mismatch",
-                    description=f"Socket.io server version ({server_version}) doesn't match client version ({client_version})",
+                    description=f"Socket.io server ({server_version}) and client ({client_version}) versions don't match",
                     category="dependencies",
                     file=str(package_file.relative_to(package_file.parent.parent)),
-                    severity="medium",
-                    solution="Ensure socket.io and socket.io-client versions match for compatibility"
+                    severity="high",
+                    solution="Ensure socket.io and socket.io-client versions match"
                 )
+                self.project_stats["package_analysis"]["version_mismatches"].append({
+                    "type": "socketio_mismatch",
+                    "packages": ["socket.io", "socket.io-client"],
+                    "versions": [server_version, client_version]
+                })
+    
+    def _check_vulnerable_dependencies(self, dependencies: Dict, package_file: Path):
+        """Check for vulnerable dependencies"""
+        for dep, version in dependencies.items():
+            if dep in VULNERABLE_PATTERNS:
+                vulnerable_range = VULNERABLE_PATTERNS[dep]
+                self._add_issue(
+                    title=f"Vulnerable Dependency: {dep}",
+                    description=f"{dep} {version} may have security vulnerabilities (affected: {vulnerable_range})",
+                    category="security",
+                    file=str(package_file.relative_to(package_file.parent.parent)),
+                    severity="high",
+                    solution=f"Update {dep} to a secure version above {vulnerable_range}"
+                )
+                self.project_stats["package_analysis"]["vulnerable_dependencies"].append({
+                    "package": dep,
+                    "version": version,
+                    "vulnerable_range": vulnerable_range
+                })
+                self.project_stats["security_scan"]["vulnerable_deps"] += 1
     
     def _check_package_scripts(self, package_data: Dict, package_file: Path):
-        """Check package.json scripts"""
+        """Check package scripts"""
         scripts = package_data.get('scripts', {})
         
         if 'start' not in scripts and 'dev' not in scripts:
@@ -679,162 +823,75 @@ class ComprehensiveProjectAnalyzer:
                 severity="low",
                 solution="Add a 'start' or 'dev' script to run your application"
             )
-        
-        # Check for dangerous scripts
-        dangerous_patterns = ['rm -rf', 'chmod 777', 'eval', 'curl | bash']
-        for script_name, script_content in scripts.items():
-            for pattern in dangerous_patterns:
-                if pattern in script_content:
-                    self._add_issue(
-                        title="Potentially Dangerous Script",
-                        description=f"Script '{script_name}' contains potentially dangerous command: {pattern}",
-                        category="security",
-                        file=str(package_file.relative_to(package_file.parent.parent)),
-                        severity="high",
-                        solution="Review and sanitize the script to remove dangerous commands"
-                    )
-    
-    def _check_engines(self, package_data: Dict, package_file: Path):
-        """Check Node.js engine requirements"""
-        engines = package_data.get('engines', {})
-        node_version = engines.get('node', '')
-        
-        if node_version:
-            # Check if Node.js version is very old
-            if any(old in node_version for old in ['0.', '4.', '6.', '8.']):
-                self._add_issue(
-                    title="Outdated Node.js Version",
-                    description=f"Project requires outdated Node.js version: {node_version}",
-                    category="dependencies",
-                    file=str(package_file.relative_to(package_file.parent.parent)),
-                    severity="medium",
-                    solution="Update to a supported Node.js version (14.x or higher recommended)"
-                )
     
     def _check_peer_dependencies(self, package_data: Dict, package_file: Path):
-        """Check for missing peer dependencies"""
-        peer_dependencies = package_data.get('peerDependencies', {})
-        dependencies = {**package_data.get('dependencies', {}), **package_data.get('devDependencies', {})}
+        """Check peer dependencies"""
+        peer_deps = package_data.get('peerDependencies', {})
+        all_deps = {**package_data.get('dependencies', {}), **package_data.get('devDependencies', {})}
         
-        for peer_dep, version in peer_dependencies.items():
-            if peer_dep not in dependencies:
+        for peer_dep, version in peer_deps.items():
+            if peer_dep not in all_deps:
                 self._add_issue(
                     title="Missing Peer Dependency",
-                    description=f"Peer dependency {peer_dep} is not installed",
+                    description=f"Peer dependency {peer_dep}@{version} is declared but not installed",
                     category="dependencies",
                     file=str(package_file.relative_to(package_file.parent.parent)),
                     severity="high",
                     solution=f"Install {peer_dep} as a dependency or devDependency"
                 )
+                self.project_stats["package_analysis"]["peer_dependency_issues"].append({
+                    "package": peer_dep,
+                    "required_version": version
+                })
     
     async def _analyze_security(self, extract_path: Path):
-        """Comprehensive security analysis"""
-        await self._check_environment_files(extract_path)
-        await self._check_config_files_security(extract_path)
-        await self._check_dependency_vulnerabilities_comprehensive(extract_path)
-    
-    async def _check_environment_files(self, extract_path: Path):
-        """Check environment files for secrets"""
+        """Security analysis"""
+        # Check environment files
         env_files = list(extract_path.rglob('.env*'))
         
         for env_file in env_files:
-            if env_file.name == '.env.example':
-                continue
-                
-            try:
-                content = env_file.read_text(encoding='utf-8', errors='ignore')
-                
-                for pattern, secret_type in SECRET_PATTERNS.items():
-                    if pattern.search(content):
-                        self._add_issue(
-                            title=f"Hardcoded {secret_type} Found",
-                            description=f"Potential {secret_type.lower()} found in {env_file.name}",
-                            category="security",
-                            file=str(env_file.relative_to(extract_path)),
-                            severity="high",
-                            solution=f"Move {secret_type.lower()} to environment variables or secure secret management system"
-                        )
-                        self.project_stats["security_scan"]["secrets_found"] += 1
-                        break
-                        
-            except Exception:
-                continue
+            if env_file.name != '.env.example':
+                self._check_env_file_secrets(env_file, extract_path)
     
-    async def _check_config_files_security(self, extract_path: Path):
-        """Check config files for security issues"""
-        config_files = list(extract_path.rglob('config.json')) + \
-                      list(extract_path.rglob('settings.json')) + \
-                      list(extract_path.rglob('constants.js'))
-        
-        for config_file in config_files[:10]:  # Limit to 10 files
-            try:
-                content = config_file.read_text(encoding='utf-8', errors='ignore')
-                
-                for pattern, secret_type in SECRET_PATTERNS.items():
-                    if pattern.search(content):
-                        self._add_issue(
-                            title=f"Hardcoded {secret_type} in Config",
-                            description=f"Potential {secret_type.lower()} found in configuration file",
-                            category="security",
-                            file=str(config_file.relative_to(extract_path)),
-                            severity="high",
-                            solution=f"Move {secret_type.lower()} to environment variables"
-                        )
-                        self.project_stats["security_scan"]["secrets_found"] += 1
-                        break
-                        
-            except Exception:
-                continue
-    
-    async def _check_dependency_vulnerabilities_comprehensive(self, extract_path: Path):
-        """Check for vulnerable dependencies"""
-        package_files = list(extract_path.rglob('package.json'))
-        package_files = [pf for pf in package_files if 'node_modules' not in str(pf)]
-        
-        for package_file in package_files[:2]:
-            try:
-                with open(package_file, 'r') as f:
-                    package_data = json.load(f)
-                
-                dependencies = {**package_data.get('dependencies', {}), 
-                              **package_data.get('devDependencies', {})}
-                
-                for dep, version in dependencies.items():
-                    if dep in VULNERABLE_PATTERNS:
-                        vulnerable_version = VULNERABLE_PATTERNS[dep]
-                        self._add_issue(
-                            title=f"Vulnerable Dependency: {dep}",
-                            description=f"{dep} version {version} may have known vulnerabilities. Affected versions: {vulnerable_version}",
-                            category="security",
-                            file=str(package_file.relative_to(extract_path)),
-                            severity="high",
-                            solution=f"Update {dep} to a secure version above {vulnerable_version}"
-                        )
-                        self.project_stats["security_scan"]["vulnerable_deps"] += 1
-                        
-            except Exception as e:
-                print(f"Error checking vulnerabilities: {e}")
+    def _check_env_file_secrets(self, env_file: Path, extract_path: Path):
+        """Check environment files for secrets"""
+        try:
+            content = env_file.read_text(encoding='utf-8', errors='ignore')
+            
+            for pattern, secret_type in SECRET_PATTERNS.items():
+                if pattern.search(content):
+                    self._add_issue(
+                        title=f"Hardcoded {secret_type}",
+                        description=f"Potential {secret_type.lower()} found in {env_file.name}",
+                        category="security",
+                        file=str(env_file.relative_to(extract_path)),
+                        severity="high",
+                        solution=f"Move {secret_type.lower()} to environment variables or secure secret management"
+                    )
+                    self.project_stats["security_scan"]["secrets_found"] += 1
+                    break
+        except Exception:
+            pass
     
     async def _analyze_code_quality(self, extract_path: Path):
-        """Comprehensive code quality analysis"""
+        """Code quality analysis"""
         await self._check_linting_config(extract_path)
         await self._check_typescript_config(extract_path)
         await self._check_testing_setup(extract_path)
-        await self._check_code_structure(extract_path)
     
     async def _check_linting_config(self, extract_path: Path):
-        """Check ESLint configuration"""
+        """Check linting configuration"""
         eslint_configs = list(extract_path.rglob('.eslintrc*')) + \
                         list(extract_path.rglob('eslint.config.js'))
         
         if not eslint_configs:
             self._add_issue(
-                title="No ESLint Configuration Found",
-                description="Project doesn't have ESLint configured for code quality",
+                title="No ESLint Configuration",
+                description="Project doesn't have ESLint configured",
                 category="code_quality",
                 file="project-root",
                 severity="low",
-                solution="Add ESLint configuration to enforce code quality standards"
+                solution="Add ESLint for code quality standards"
             )
             self.project_stats["code_quality"]["eslint_issues"] += 1
     
@@ -852,19 +909,18 @@ class ComprehensiveProjectAnalyzer:
                     if not compiler_options.get('strict'):
                         self._add_issue(
                             title="TypeScript Strict Mode Disabled",
-                            description="TypeScript strict mode is not enabled",
+                            description="Strict mode is not enabled in TypeScript",
                             category="code_quality",
                             file=str(tsconfig.relative_to(extract_path)),
                             severity="medium",
                             solution="Enable strict mode in tsconfig.json for better type safety"
                         )
                         self.project_stats["code_quality"]["typescript_issues"] += 1
-                        
-                except Exception as e:
-                    print(f"Error reading tsconfig.json: {e}")
+                except Exception:
+                    pass
     
     async def _check_testing_setup(self, extract_path: Path):
-        """Check testing framework setup"""
+        """Check testing setup"""
         test_files = list(extract_path.rglob('*.test.js')) + \
                     list(extract_path.rglob('*.spec.js')) + \
                     list(extract_path.rglob('*.test.ts')) + \
@@ -873,222 +929,101 @@ class ComprehensiveProjectAnalyzer:
         if not test_files:
             self._add_issue(
                 title="No Test Files Found",
-                description="Project doesn't appear to have any test files",
+                description="Project doesn't have test files",
                 category="code_quality",
                 file="project-root",
                 severity="low",
-                solution="Add test files to ensure code reliability"
+                solution="Add test files for code reliability"
             )
             self.project_stats["code_quality"]["testing_issues"] += 1
     
-    async def _check_code_structure(self, extract_path: Path):
-        """Check code structure and organization"""
-        # Check for proper src directory
-        src_dir = extract_path / 'src'
-        if not src_dir.exists():
-            self._add_issue(
-                title="No src Directory",
-                description="Project doesn't have a standard src directory structure",
-                category="code_quality",
-                file="project-root",
-                severity="low",
-                solution="Consider organizing source code in a src directory"
-            )
-    
     async def _analyze_deployment(self, extract_path: Path):
-        """Comprehensive deployment analysis"""
-        await self._check_build_configurations(extract_path)
-        await self._check_environment_configs(extract_path)
-        await self._check_deployment_files(extract_path)
+        """Deployment analysis"""
+        await self._check_build_configs(extract_path)
+        await self._check_docker_configs(extract_path)
     
-    async def _check_build_configurations(self, extract_path: Path):
+    async def _check_build_configs(self, extract_path: Path):
         """Check build configurations"""
         build_configs = list(extract_path.rglob('webpack.config.js')) + \
                        list(extract_path.rglob('vite.config.js')) + \
-                       list(extract_path.rglob('vite.config.ts')) + \
-                       list(extract_path.rglob('rollup.config.js'))
+                       list(extract_path.rglob('vite.config.ts'))
         
         if not build_configs:
             self._add_issue(
-                title="No Build Configuration Found",
-                description="Project doesn't have a build tool configuration",
+                title="No Build Configuration",
+                description="No build tool configuration found",
                 category="deployment",
                 file="project-root",
                 severity="low",
-                solution="Configure a build tool like Webpack or Vite for production builds"
+                solution="Configure a build tool like Webpack or Vite"
             )
             self.project_stats["deployment"]["build_issues"] += 1
     
-    async def _check_environment_configs(self, extract_path: Path):
-        """Check environment configurations"""
-        env_example = extract_path / '.env.example'
-        env_files = list(extract_path.rglob('.env*'))
-        
-        if not env_example.exists() and any('.env' in str(f) for f in env_files):
-            self._add_issue(
-                title="Missing .env.example File",
-                description="Project has environment files but no .env.example template",
-                category="deployment",
-                file="project-root",
-                severity="low",
-                solution="Add a .env.example file with template variables for documentation"
-            )
-            self.project_stats["deployment"]["config_issues"] += 1
-    
-    async def _check_deployment_files(self, extract_path: Path):
-        """Check deployment configuration files"""
+    async def _check_docker_configs(self, extract_path: Path):
+        """Check Docker configurations"""
         docker_files = list(extract_path.rglob('Dockerfile')) + \
                       list(extract_path.rglob('docker-compose.yml'))
         
         if not docker_files:
             self._add_issue(
                 title="No Docker Configuration",
-                description="Project doesn't have Docker configuration for containerization",
+                description="No Docker configuration found",
                 category="deployment",
                 file="project-root",
                 severity="low",
-                solution="Consider adding Docker configuration for easier deployment"
+                solution="Consider adding Docker for containerization"
             )
-    
-    async def _analyze_tech_stack(self, extract_path: Path):
-        """Analyze technology stack"""
-        tech_stack = {
-            "frontend": set(),
-            "backend": set(),
-            "build_tools": set(),
-            "testing": set()
-        }
-        
-        package_files = list(extract_path.rglob('package.json'))
-        
-        for package_file in package_files:
-            if 'node_modules' in str(package_file):
-                continue
-                
-            try:
-                with open(package_file, 'r', encoding='utf-8') as f:
-                    package_data = json.load(f)
-                
-                dependencies = {**package_data.get('dependencies', {}), **package_data.get('devDependencies', {})}
-                
-                # Frontend frameworks
-                frontend_frameworks = {
-                    'react': 'React', 'next': 'Next.js', 'vue': 'Vue.js', 
-                    'angular': 'Angular', 'svelte': 'Svelte', '@angular/core': 'Angular'
-                }
-                
-                # Backend frameworks
-                backend_frameworks = {
-                    'express': 'Express.js', 'koa': 'Koa', 'fastify': 'Fastify',
-                    'nestjs': 'NestJS', 'socket.io': 'Socket.IO'
-                }
-                
-                # Build tools
-                build_tools = {
-                    'webpack': 'Webpack', 'vite': 'Vite', 'rollup': 'Rollup',
-                    'parcel': 'Parcel', 'esbuild': 'esbuild'
-                }
-                
-                # Testing frameworks
-                testing_tools = {
-                    'jest': 'Jest', 'mocha': 'Mocha', 'jasmine': 'Jasmine',
-                    'vitest': 'Vitest', '@testing-library/react': 'React Testing Library'
-                }
-                
-                for dep, name in frontend_frameworks.items():
-                    if dep in dependencies:
-                        tech_stack["frontend"].add(name)
-                
-                for dep, name in backend_frameworks.items():
-                    if dep in dependencies:
-                        tech_stack["backend"].add(name)
-                
-                for dep, name in build_tools.items():
-                    if dep in dependencies:
-                        tech_stack["build_tools"].add(name)
-                
-                for dep, name in testing_tools.items():
-                    if dep in dependencies:
-                        tech_stack["testing"].add(name)
-                        
-            except Exception as e:
-                continue
-        
-        # Convert sets to lists
-        self.project_stats["tech_stack"] = {
-            category: list(frameworks) 
-            for category, frameworks in tech_stack.items()
-        }
-    
-    async def _analyze_dependencies(self, extract_path: Path):
-        """Advanced dependency analysis"""
-        # This would include more sophisticated vulnerability checks
-        # and dependency graph analysis in a real implementation
-        pass
+            self.project_stats["deployment"]["config_issues"] += 1
     
     async def _analyze_code_complexity(self, extract_path: Path):
-        """Analyze code complexity"""
+        """Code complexity analysis"""
         source_files = list(extract_path.rglob('*.js')) + list(extract_path.rglob('*.jsx')) + \
                       list(extract_path.rglob('*.ts')) + list(extract_path.rglob('*.tsx'))
         
-        complex_files = []
-        
-        for file_path in source_files[:50]:
+        for file_path in source_files[:30]:
             try:
-                complexity = self._calculate_file_complexity(file_path)
+                complexity = self._calculate_complexity(file_path)
                 if complexity > 50:
-                    complex_files.append({
-                        'file': str(file_path.relative_to(extract_path)),
-                        'complexity_score': complexity
-                    })
                     self._add_issue(
                         title="High Code Complexity",
-                        description=f"File has high complexity score ({complexity}) - consider refactoring",
+                        description=f"File has high complexity score ({complexity})",
                         category="code_quality",
                         file=str(file_path.relative_to(extract_path)),
                         severity="medium",
-                        solution="Consider refactoring into smaller functions or modules, extract reusable components"
+                        solution="Refactor into smaller functions or modules"
                     )
-                    self.project_stats["advanced_metrics"]["code_complexity"]["high_complexity_files"] += 1
             except Exception:
                 continue
-        
-        self.project_stats["advanced_metrics"]["code_complexity"]["most_complex_files"] = \
-            sorted(complex_files, key=lambda x: x['complexity_score'], reverse=True)[:5]
     
-    def _calculate_file_complexity(self, file_path: Path) -> int:
-        """Calculate cyclomatic complexity"""
+    def _calculate_complexity(self, file_path: Path) -> int:
+        """Calculate code complexity"""
         try:
             with open(file_path, 'r', encoding='utf-8') as f:
                 content = f.read()
             
-            complexity_score = 0
-            complexity_score += content.count('if ')
-            complexity_score += content.count('for ')
-            complexity_score += content.count('while ')
-            complexity_score += content.count('catch ')
-            complexity_score += content.count('switch ')
-            complexity_score += content.count('&&')
-            complexity_score += content.count('||')
-            complexity_score += content.count('? :')
-            complexity_score += content.count('case ')
+            complexity = 0
+            complexity += content.count('if ')
+            complexity += content.count('for ')
+            complexity += content.count('while ')
+            complexity += content.count('catch ')
+            complexity += content.count('switch ')
+            complexity += content.count('&&')
+            complexity += content.count('||')
             
-            return complexity_score
+            return complexity
         except:
             return 0
     
     async def _analyze_performance(self, extract_path: Path):
-        """Analyze performance issues"""
+        """Performance analysis"""
         source_files = list(extract_path.rglob('*.js')) + list(extract_path.rglob('*.jsx')) + \
                       list(extract_path.rglob('*.ts')) + list(extract_path.rglob('*.tsx'))
         
-        performance_issue_count = 0
-        
-        for file_path in source_files[:100]:
+        for file_path in source_files[:50]:
             try:
                 content = file_path.read_text(encoding='utf-8', errors='ignore')
                 
-                # Check for common performance issues
+                # Check for missing React keys
                 if re.search(r'\.map\s*\(\s*\(\s*\w+\s*\)\s*=>', content) and 'key=' not in content:
                     self._add_issue(
                         title="Missing React Keys",
@@ -1098,138 +1033,41 @@ class ComprehensiveProjectAnalyzer:
                         severity="medium",
                         solution="Add unique key prop to list items"
                     )
-                    performance_issue_count += 1
                 
+                # Check for inline functions in JSX
                 if re.search(r'onClick={\(\) => [^}]+}', content):
                     self._add_issue(
                         title="Inline Function in JSX",
-                        description="Inline function declarations can cause unnecessary re-renders",
+                        description="Inline function declarations can cause re-renders",
                         category="performance",
                         file=str(file_path.relative_to(extract_path)),
                         severity="medium",
-                        solution="Define functions outside JSX or use useCallback hook"
+                        solution="Define functions outside JSX or use useCallback"
                     )
-                    performance_issue_count += 1
                     
             except Exception:
                 continue
-        
-        self.project_stats["advanced_metrics"]["performance_issues"] = performance_issue_count
-    
-    async def _analyze_accessibility(self, extract_path: Path):
-        """Analyze accessibility issues"""
-        jsx_files = list(extract_path.rglob('*.jsx')) + list(extract_path.rglob('*.tsx'))
-        
-        accessibility_issue_count = 0
-        
-        for file_path in jsx_files[:50]:
-            try:
-                content = file_path.read_text(encoding='utf-8', errors='ignore')
-                
-                # Missing alt attributes
-                if re.search(r'<img[^>]*?(?<=\s)(?!(alt=))[^>]*?>', content):
-                    self._add_issue(
-                        title="Missing Alt Text",
-                        description="Image missing alt attribute for screen readers",
-                        category="accessibility",
-                        file=str(file_path.relative_to(extract_path)),
-                        severity="medium",
-                        solution="Add descriptive alt text to all img tags"
-                    )
-                    accessibility_issue_count += 1
-                
-                # Missing form labels
-                if re.search(r'<input[^>]*?(?!(aria-label=|aria-labelledby=|id=))[^>]*?>', content) and \
-                   not re.search(r'<label[^>]*?>.*?</label>', content):
-                    self._add_issue(
-                        title="Missing Form Label",
-                        description="Input field missing associated label",
-                        category="accessibility",
-                        file=str(file_path.relative_to(extract_path)),
-                        severity="medium",
-                        solution="Add label with htmlFor attribute or use aria-label"
-                    )
-                    accessibility_issue_count += 1
-                    
-            except Exception:
-                continue
-        
-        self.project_stats["advanced_metrics"]["accessibility_issues"] = accessibility_issue_count
-    
-    async def _analyze_architecture(self, extract_path: Path):
-        """Analyze architecture issues"""
-        # Simple architecture checks
-        source_files = list(extract_path.rglob('*.jsx')) + list(extract_path.rglob('*.tsx'))
-        
-        architecture_issue_count = 0
-        
-        for file_path in source_files[:30]:
-            try:
-                content = file_path.read_text(encoding='utf-8', errors='ignore')
-                
-                # Check for mixed responsibilities
-                if ('fetch(' in content or 'axios' in content) and ('<div' in content or '<span' in content):
-                    if content.count('<') > 10:  # Has significant rendering
-                        self._add_issue(
-                            title="Mixed Responsibilities",
-                            description="Component appears to handle both data fetching and rendering",
-                            category="architecture",
-                            file=str(file_path.relative_to(extract_path)),
-                            severity="low",
-                            solution="Consider separating data fetching logic from presentation components"
-                        )
-                        architecture_issue_count += 1
-                        
-            except Exception:
-                continue
-        
-        self.project_stats["advanced_metrics"]["architecture_issues"] = architecture_issue_count
-    
-    async def _analyze_ci_cd(self, extract_path: Path):
-        """Analyze CI/CD configuration"""
-        ci_files = list(extract_path.rglob('.github/workflows/*.yml')) + \
-                   list(extract_path.rglob('.gitlab-ci.yml')) + \
-                   list(extract_path.rglob('azure-pipelines.yml'))
-        
-        ci_cd_issue_count = 0
-        
-        if not ci_files:
-            self._add_issue(
-                title="No CI/CD Configuration Found",
-                description="Project doesn't have continuous integration setup",
-                category="deployment",
-                file="project-root",
-                severity="medium",
-                solution="Add CI/CD configuration for automated testing and deployment"
-            )
-            ci_cd_issue_count += 1
-        
-        self.project_stats["advanced_metrics"]["ci_cd_issues"] = ci_cd_issue_count
     
     async def _enhance_issues_with_llm(self, extract_path: Path) -> bool:
-        """Enhance issues with LLM analysis"""
+        """Enhance issues with LLM"""
         if not self.issues or not self.llm_analyzer.enabled:
             return False
         
-        critical_issues = [issue for issue in self.issues if issue.get('severity') in ['high', 'medium']][:5]
+        critical_issues = [issue for issue in self.issues if issue.get('severity') in ['high', 'medium']][:3]
         
         if not critical_issues:
             return False
         
         try:
-            # Get code contexts for critical issues
             code_contexts = {}
-            
             for issue in critical_issues:
                 if 'file' in issue and issue['file'] != 'project-root':
-                    content = await self._get_file_content_async(extract_path / issue['file'])
+                    content = await self._get_file_content(extract_path / issue['file'])
                     if content:
                         code_contexts[issue.get('file', '')] = content
             
-            # Enhance issues with LLM
             enhanced_issues = await self.llm_analyzer.analyze_issues_batch(critical_issues, code_contexts)
             
-            # Update the issues list
             for i, enhanced_issue in enumerate(enhanced_issues):
                 if enhanced_issue.get('llm_enhanced'):
                     for j, original_issue in enumerate(self.issues):
@@ -1244,25 +1082,23 @@ class ComprehensiveProjectAnalyzer:
             print(f"LLM enhancement failed: {e}")
             return False
 
-    async def _get_file_content_async(self, file_path: Path) -> str:
-        """Get file content for LLM context"""
+    async def _get_file_content(self, file_path: Path) -> str:
+        """Get file content for LLM"""
         try:
             if file_path.exists() and file_path.is_file():
                 loop = asyncio.get_event_loop()
                 with open(file_path, 'r', encoding='utf-8') as f:
                     content = await loop.run_in_executor(None, f.read)
-                return content[:3000]
+                return content[:2000]
         except Exception:
             pass
         return ""
 
     def _add_issue(self, title: str, description: str, category: str, file: str = "", 
                   severity: str = "medium", solution: str = ""):
-        """Add an issue to the results"""
+        """Add issue to results"""
         if severity == "high":
             self._critical_issue_count += 1
-        
-        severity_to_priority = {"high": 1, "medium": 2, "low": 3}
         
         self.issues.append({
             "title": title,
@@ -1270,14 +1106,13 @@ class ComprehensiveProjectAnalyzer:
             "category": category,
             "file": file,
             "severity": severity,
-            "priority": severity_to_priority.get(severity, 2),
+            "priority": 1 if severity == "high" else 2 if severity == "medium" else 3,
             "solution": solution,
-            "fix": solution,
             "timestamp": datetime.now().isoformat()
         })
     
     def _calculate_health_score(self) -> int:
-        """Calculate project health score"""
+        """Calculate health score"""
         base_score = 100
         
         for issue in self.issues:
@@ -1288,62 +1123,40 @@ class ComprehensiveProjectAnalyzer:
             else:
                 base_score -= 2
         
-        # Bonus points for good practices
-        if self.project_stats.get("package_files", 0) > 0:
-            base_score += 5
-        if self.project_stats["security_scan"]["vulnerable_deps"] == 0:
-            base_score += 5
-        if self.project_stats["code_quality"]["testing_issues"] == 0:
-            base_score += 5
-        
         return max(0, min(100, base_score))
 
     def _generate_summary(self) -> Dict:
-        """Generate comprehensive summary"""
+        """Generate summary"""
         issue_count = len(self.issues)
         health_score = self._calculate_health_score()
         
-        # Calculate priority breakdown
         priority_breakdown = {"high": 0, "medium": 0, "low": 0}
+        category_breakdown = {}
+        
         for issue in self.issues:
             priority_breakdown[issue['severity']] += 1
-        
-        # Calculate category breakdown
-        category_breakdown = {}
-        for issue in self.issues:
             category = issue['category']
             category_breakdown[category] = category_breakdown.get(category, 0) + 1
         
-        if health_score >= 80:
-            status = "healthy"
-        elif health_score >= 60:
-            status = "needs attention"
-        else:
-            status = "needs work"
+        status = "healthy" if health_score >= 80 else "needs attention" if health_score >= 60 else "needs work"
         
         return {
             "total_issues": issue_count,
             "health_status": status,
             "health_score": health_score,
-            "analysis_complete": not self.project_stats["performance"]["early_termination"],
             "priority_breakdown": priority_breakdown,
-            "category_breakdown": category_breakdown,
-            "security_scan": self.project_stats["security_scan"],
-            "code_quality": self.project_stats["code_quality"],
-            "deployment": self.project_stats["deployment"],
-            "performance": self.project_stats["performance"],
-            "advanced_metrics": self.project_stats["advanced_metrics"]
+            "category_breakdown": category_breakdown
         }
     
     async def _cleanup_directory(self, directory_path: Path):
-        """Cleanup temporary directory"""
+        """Cleanup directory"""
         try:
             if directory_path.exists():
-                def remove_directory(path):
+                def remove_dir(path):
                     shutil.rmtree(path, ignore_errors=True)
                 
                 loop = asyncio.get_event_loop()
-                await loop.run_in_executor(None, remove_directory, directory_path)
+                await loop.run_in_executor(None, remove_dir, directory_path)
         except Exception as e:
             print(f"Cleanup warning: {e}")
 
@@ -1351,19 +1164,21 @@ class ComprehensiveProjectAnalyzer:
 @app.route('/')
 def root():
     return jsonify({
-        "message": "CodeCopilot API - Comprehensive Edition",
+        "message": "CodeCopilot API - Backend Cleaning Edition",
         "version": "2.0.0",
         "status": "running",
         "llm_enabled": LLM_ENABLED,
         "llm_model_available": gemini_model is not None,
-        "performance_optimized": True,
-        "comprehensive_features": True,
-        "max_file_size": f"{MAX_FILE_SIZE // (1024*1024)}MB",
+        "backend_cleaning": True,
+        "max_cleaned_size_mb": MAX_EXTRACTED_SIZE // (1024*1024),
         "features": [
-            "Dependency Analysis", "Security Scanning", "Code Quality Checks",
-            "Performance Analysis", "Accessibility Scanning", "Architecture Review",
-            "CI/CD Configuration Check", "AI-Powered Insights", "Tech Stack Analysis",
-            "Code Complexity Analysis", "Advanced Vulnerability Detection"
+            "Accepts any file size",
+            "Backend file cleaning", 
+            "Dependency analysis",
+            "Security scanning",
+            "Code quality checks",
+            "Performance analysis",
+            "AI-powered insights"
         ]
     })
 
@@ -1390,15 +1205,14 @@ def health_check():
         return jsonify({
             "status": "healthy",
             "timestamp": datetime.now().isoformat(),
-            "service": "codecopilot-comprehensive",
+            "service": "codecopilot-backend-cleaning",
             "version": "2.0.0",
             "llm_available": LLM_ENABLED,
             "llm_model_available": model_working,
-            "performance": {
-                "max_file_size_mb": MAX_FILE_SIZE // (1024*1024),
-                "max_extracted_size_mb": MAX_EXTRACTED_SIZE // (1024*1024),
-                "max_file_count": MAX_FILE_COUNT,
-                "max_scan_files": MAX_SCAN_FILES
+            "backend_cleaning": True,
+            "limits": {
+                "max_cleaned_size_mb": MAX_EXTRACTED_SIZE // (1024*1024),
+                "max_file_count": MAX_FILE_COUNT
             }
         })
     except Exception as e:
@@ -1407,6 +1221,7 @@ def health_check():
 @app.route('/api/analyze', methods=['POST'])
 @limiter.limit("10 per minute")
 def analyze_project():
+    """Accept any file size, clean in backend, then check size"""
     if 'file' not in request.files:
         return jsonify({"error": "No file provided"}), 400
     
@@ -1415,34 +1230,33 @@ def analyze_project():
         return jsonify({"error": "No file selected"}), 400
     
     if not file.filename.endswith('.zip'):
-        return jsonify({"error": "Please upload a ZIP file"}), 400
+        return jsonify({
+            "error": "Please upload a ZIP file",
+            "note": "We accept any size ZIP file and will clean it in the backend"
+        }), 400
     
     temp_dir = Path(tempfile.mkdtemp())
     temp_file = temp_dir / PermissiveSecurityScanner.sanitize_filename(file.filename)
     
     try:
+        # 🎯 ACCEPT ANY FILE SIZE - we'll handle cleaning in backend
         file.save(temp_file)
         
-        # Basic file size check
-        if temp_file.stat().st_size > MAX_FILE_SIZE:
-            return jsonify({
-                "error": f"File too large. Maximum size is {MAX_FILE_SIZE // (1024*1024)}MB."
-            }), 400
-        
+        # Basic validation
         if temp_file.stat().st_size == 0:
             return jsonify({"error": "File is empty"}), 400
         
-        # 🎯 COMPREHENSIVE ANALYSIS - always returns results
+        print(f"📥 Received file: {temp_file.stat().st_size // (1024*1024)}MB")
+        
+        # 🎯 COMPREHENSIVE ANALYSIS WITH BACKEND CLEANING
         analyzer = ComprehensiveProjectAnalyzer()
         results = asyncio.run(analyzer.analyze_project(temp_file))
         
         return jsonify(results)
         
     except Exception as e:
-        # 🎯 NEVER FAIL - return basic analysis even on error
-        analyzer = ComprehensiveProjectAnalyzer()
-        fallback_results = analyzer._get_error_analysis(str(e))
-        return jsonify(fallback_results)
+        # Error handling
+        return jsonify({"error": f"Analysis failed: {str(e)}"}), 500
     finally:
         # Cleanup
         try:
@@ -1453,141 +1267,41 @@ def analyze_project():
         except Exception:
             pass
 
-@app.route('/api/rules')
-def get_available_rules():
+@app.route('/api/capabilities')
+def get_capabilities():
+    """Return information about what size projects we can handle"""
     return jsonify({
-        "rules": [
-            {
-                "id": "socket_version_mismatch",
-                "name": "Socket.io Version Mismatch",
-                "description": "Checks if socket.io client and server versions match",
-                "priority": 1
-            },
-            {
-                "id": "react_version_mismatch", 
-                "name": "React Version Mismatch",
-                "description": "Checks if React and ReactDOM versions match",
-                "priority": 2
-            },
-            {
-                "id": "missing_peer_dependencies",
-                "name": "Missing Peer Dependencies",
-                "description": "Checks for missing peer dependencies",
-                "priority": 2
-            },
-            {
-                "id": "invalid_package_json",
-                "name": "Invalid package.json",
-                "description": "Validates package.json structure",
-                "priority": 1
-            },
-            {
-                "id": "missing_start_script", 
-                "name": "Missing Start Script",
-                "description": "Checks for missing start or dev scripts",
-                "priority": 3
-            },
-            {
-                "id": "outdated_node_version",
-                "name": "Outdated Node.js Version",
-                "description": "Checks for outdated Node.js engine requirements",
-                "priority": 1
-            },
-            {
-                "id": "vulnerable_dependencies",
-                "name": "Vulnerable Dependencies",
-                "description": "Checks for dependencies with known security vulnerabilities",
-                "priority": 1
-            },
-            {
-                "id": "hardcoded_secrets",
-                "name": "Hardcoded Secrets",
-                "description": "Scans for exposed API keys and credentials",
-                "priority": 1
-            },
-            {
-                "id": "security_misconfigurations",
-                "name": "Security Misconfigurations",
-                "description": "Checks for dangerous scripts and security issues",
-                "priority": 2
-            },
-            {
-                "id": "eslint_configuration",
-                "name": "ESLint Configuration",
-                "description": "Checks for proper linting setup and security rules",
-                "priority": 2
-            },
-            {
-                "id": "typescript_strictness",
-                "name": "TypeScript Strictness",
-                "description": "Ensures TypeScript is properly configured for type safety",
-                "priority": 2
-            },
-            {
-                "id": "testing_setup",
-                "name": "Testing Setup",
-                "description": "Checks for testing framework and test files",
-                "priority": 3
-            },
-            {
-                "id": "build_configurations",
-                "name": "Build Configurations",
-                "description": "Checks for build tool setup and optimizations",
-                "priority": 2
-            },
-            {
-                "id": "environment_configs",
-                "name": "Environment Configurations",
-                "description": "Validates environment variable management",
-                "priority": 2
-            },
-            {
-                "id": "deployment_files",
-                "name": "Deployment Files",
-                "description": "Checks for Docker and deployment configurations",
-                "priority": 3
-            },
-            {
-                "id": "code_complexity",
-                "name": "Code Complexity",
-                "description": "Analyzes code complexity and maintainability",
-                "priority": 2
-            },
-            {
-                "id": "performance_issues",
-                "name": "Performance Issues",
-                "description": "Detects performance anti-patterns",
-                "priority": 2
-            },
-            {
-                "id": "accessibility",
-                "name": "Accessibility",
-                "description": "Checks for accessibility issues",
-                "priority": 3
-            },
-            {
-                "id": "architecture",
-                "name": "Architecture",
-                "description": "Analyzes project architecture patterns",
-                "priority": 2
-            },
-            {
-                "id": "ci_cd_configuration",
-                "name": "CI/CD Configuration",
-                "description": "Checks CI/CD pipeline best practices",
-                "priority": 3
-            }
-        ],
-        "llm_capabilities": LLM_ENABLED,
-        "llm_model_available": gemini_model is not None,
-        "comprehensive_features": True
+        "backend_cleaning": True,
+        "process": {
+            "step1": "Accept any size ZIP file",
+            "step2": "Extract and remove non-essential files (node_modules, .git, etc.)",
+            "step3": "Check if cleaned size is under 150MB",
+            "step4": "Perform comprehensive analysis"
+        },
+        "limits": {
+            "max_cleaned_size": f"{MAX_EXTRACTED_SIZE // (1024*1024)}MB",
+            "max_file_count": f"{MAX_FILE_COUNT:,} files",
+            "what_we_remove": [
+                "node_modules/ (300-800MB typically)",
+                ".git/ (100-300MB typically)", 
+                "dist/, build/ directories",
+                "Media files (images, videos)",
+                "Executables and binaries"
+            ],
+            "what_we_keep": [
+                "package.json files (for dependency analysis)",
+                "Source code (.js, .ts, .jsx, .tsx)",
+                "Configuration files",
+                "Documentation"
+            ]
+        },
+        "estimated_capacity": {
+            "small_project": "5-50MB (easily handled)",
+            "medium_project": "50-500MB (usually works after cleaning)",
+            "large_project": "500MB-2GB (may work if mostly node_modules)",
+            "very_large_project": "2GB+ (may exceed limit after cleaning)"
+        }
     })
-
-@app.errorhandler(413)
-def too_large(e):
-    return jsonify({
-        "error": f"File too large. Maximum size is {MAX_FILE_SIZE // (1024*1024)}MB."
-    }), 413
 
 @app.errorhandler(429)
 def ratelimit_handler(e):
@@ -1599,23 +1313,11 @@ if __name__ == '__main__':
     port = int(os.getenv("PORT", 5000))
     debug = os.getenv("FLASK_DEBUG", "false").lower() == "true"
     
-    print(f"🚀 Starting Comprehensive CodeCopilot Backend on port {port}")
+    print(f"🚀 Starting CodeCopilot Backend with File Cleaning on port {port}")
+    print(f"🎯 KEY FEATURE: Accepts any file size, cleans in backend")
+    print(f"📁 Max Cleaned Size: {MAX_EXTRACTED_SIZE // (1024*1024)}MB (after removing non-essential files)")
+    print(f"🗑️  Removes automatically: node_modules, .git, dist, build, media files")
+    print(f"📊 Keeps for analysis: package.json, source code, config files")
     print(f"🧠 LLM Features: {'Enabled' if LLM_ENABLED else 'Disabled'}")
-    if LLM_ENABLED:
-        print(f"   Model Status: {'✅ Working' if gemini_model else '❌ Not Available'}")
-    print(f"📁 Max File Size: {MAX_FILE_SIZE // (1024*1024)}MB")
-    print(f"📦 Max Extracted Size: {MAX_EXTRACTED_SIZE // (1024*1024)}MB")
-    print(f"📊 Max File Count: {MAX_FILE_COUNT:,} files")
-    print(f"🎯 Key Feature: ALWAYS returns analysis results")
-    print(f"⚡ Comprehensive Analysis: Enabled")
-    print(f"   - Dependency Analysis")
-    print(f"   - Security Scanning") 
-    print(f"   - Code Quality Checks")
-    print(f"   - Performance Analysis")
-    print(f"   - Accessibility Scanning")
-    print(f"   - Architecture Review")
-    print(f"   - CI/CD Configuration")
-    print(f"   - Tech Stack Analysis")
-    print(f"   - Advanced Metrics")
     
     app.run(host="0.0.0.0", port=port, debug=debug, threaded=True)
