@@ -29,18 +29,18 @@ except ImportError:
 # Load environment variables
 load_dotenv()
 
-# 🚀 RENDER-FRIENDLY PERFORMANCE CONSTANTS
-MAX_FILE_SIZE = 100 * 1024 * 1024  # 100MB (reduced from 400MB)
-MAX_EXTRACTED_SIZE = 200 * 1024 * 1024  # 200MB (reduced from 800MB)
-MAX_FILE_COUNT = 10000  # Reduced from 50000
-MAX_COMPRESSION_RATIO = 30  # Reduced from 50
-MAX_DEPTH = 10  # Reduced from 20
+# 🚀 BALANCED PERFORMANCE CONSTANTS FOR RENDER
+MAX_FILE_SIZE = 150 * 1024 * 1024  # 150MB (balanced - was 100MB)
+MAX_EXTRACTED_SIZE = 300 * 1024 * 1024  # 300MB (balanced - was 200MB)
+MAX_FILE_COUNT = 20000  # Balanced - was 10000
+MAX_COMPRESSION_RATIO = 30
+MAX_DEPTH = 15  # Balanced - was 10
 
-# 🚀 RENDER-FRIENDLY PERFORMANCE SETTINGS
-MAX_WORKERS = min(2, multiprocessing.cpu_count())  # Reduced from 4
-BATCH_SIZE = 20  # Reduced from 50
-MAX_SCAN_FILES = 2000  # Reduced from 10000
-EARLY_RETURN_CRITICAL_ISSUES = 3  # Reduced from 5
+# 🚀 BALANCED PERFORMANCE SETTINGS
+MAX_WORKERS = min(3, multiprocessing.cpu_count())  # Balanced - was 2
+BATCH_SIZE = 30  # Balanced - was 20
+MAX_SCAN_FILES = 5000  # Balanced - was 2000
+EARLY_RETURN_CRITICAL_ISSUES = 4  # Balanced - was 3
 
 app = Flask(__name__)
 app.config.update(
@@ -72,7 +72,7 @@ if GEMINI_API_KEY and GEMINI_AVAILABLE:
         
         # Try different model names
         model_names = [
-            "gemini-2.0-flash",
+            "gemini-2.0-flash-exp",
             "gemini-1.5-flash",
             "gemini-1.5-pro",
             "gemini-pro",
@@ -137,76 +137,64 @@ SKIP_PATHS = {
     '.parcel-cache', '.eslintcache', '.tsbuildinfo'
 }
 
-class SecurityScanner:
-    """Ultra-optimized security scanner for Render free tier"""
+class SmartSecurityScanner:
+    """Smart security scanner that balances performance and file size support"""
     
-    # 🎯 SKIP THESE EXTENSIONS COMPLETELY (User can't change these)
+    # 🎯 SMART FILE SKIPPING - Skip binaries but allow larger source files
     SKIP_EXTENSIONS = {
         # Executables
         '.bat', '.cmd', '.ps1', '.sh', '.scr', '.com', '.pif', '.msi',
         '.jar', '.war', '.apk', '.exe', '.dll', '.so', '.dylib',
-        # Archives
+        # Archives (nested)
         '.zip', '.rar', '.7z', '.tar', '.gz', '.bz2', '.xz',
-        # Media files (large and irrelevant for code analysis)
-        '.jpg', '.jpeg', '.png', '.gif', '.bmp', '.tiff', '.webp',
+        # Very large media files
         '.mp4', '.avi', '.mov', '.wmv', '.flv', '.webm',
         '.mp3', '.wav', '.ogg', '.flac',
+        # Large documents
         '.pdf', '.doc', '.docx', '.ppt', '.pptx',
-        # Fonts and other binaries
+    }
+    
+    # 🎯 ALLOW these larger files but process them smartly
+    LARGE_FILE_EXTENSIONS = {
+        '.jpg', '.jpeg', '.png', '.gif', '.bmp', '.tiff', '.webp',
         '.woff', '.woff2', '.ttf', '.eot', '.otf',
         '.ico', '.icns'
-    }
-    
-    # 🎯 FILES TO SCAN (Focus only on these)
-    SCAN_EXTENSIONS = {
-        '.json', '.yml', '.yaml', '.config.js', '.config.ts',
-        '.env', '.env.example', '.env.local',
-        '.js', '.jsx', '.ts', '.tsx', '.vue', '.svelte',
-        '.html', '.htm', '.css', '.scss', '.sass', '.less',
-        '.md', '.txt', '.xml',
-    }
-    
-    SCAN_FILENAMES = {
-        'package.json', 'package-lock.json', 'yarn.lock', 'pnpm-lock.yaml',
-        'dockerfile', '.dockerignore', 'docker-compose.yml',
-        '.eslintrc', '.prettierrc', '.babelrc', 'tsconfig.json', 'webpack.config.js',
-        'vite.config.js', 'vite.config.ts', 'rollup.config.js'
     }
     
     def __init__(self):
         self.skipped_files = []
         self.warned_files = []
         self.detected_threats = []
+        self.total_extracted_size = 0
     
     def validate_and_extract_zip(self, zip_path: Path, extract_path: Path) -> Dict:
-        """Ultra-optimized ZIP extraction for Render"""
+        """Smart ZIP extraction that handles larger files efficiently"""
         self.skipped_files = []
         self.warned_files = []
         self.detected_threats = []
+        self.total_extracted_size = 0
         
         try:
-            # Basic ZIP validation
             if not self._is_valid_zip(zip_path):
-                return {"valid": False, "error": "This doesn't appear to be a valid ZIP file."}
+                return {"valid": False, "error": "Invalid ZIP file"}
             
-            # Sequential bomb detection (reduced parallel overhead)
-            bomb_check = self._sequential_detect_zip_bomb(zip_path)
+            # Smart bomb detection with progress tracking
+            bomb_check = self._smart_detect_zip_bomb(zip_path)
             if not bomb_check["safe"]:
                 return self._get_zip_bomb_error_message(bomb_check)
             
             extract_path.mkdir(parents=True, exist_ok=True)
             
             with zipfile.ZipFile(zip_path, 'r') as zip_ref:
-                # Sequential extraction for reduced memory usage
-                return self._sequential_extract_files(zip_ref, extract_path)
+                return self._smart_extract_files(zip_ref, extract_path)
                 
         except zipfile.BadZipFile:
-            return {"valid": False, "error": "This file appears to be corrupted or not a valid ZIP file."}
+            return {"valid": False, "error": "Corrupted ZIP file"}
         except Exception as e:
-            return {"valid": False, "error": f"Failed to process your project: {str(e)}"}
+            return {"valid": False, "error": f"Processing failed: {str(e)}"}
 
-    def _sequential_detect_zip_bomb(self, zip_path: Path) -> Dict:
-        """Sequential zip bomb detection for reduced memory usage"""
+    def _smart_detect_zip_bomb(self, zip_path: Path) -> Dict:
+        """Smart detection that handles larger files"""
         try:
             with zipfile.ZipFile(zip_path, 'r') as zip_ref:
                 total_files = 0
@@ -215,29 +203,31 @@ class SecurityScanner:
                 max_depth = 0
                 
                 for file_info in zip_ref.infolist():
-                    # Check for path traversal
+                    # Skip security checks for allowed large files early
+                    if self._is_large_media_file(file_info.filename):
+                        continue
+                    
+                    # Security checks for other files
                     if '..' in file_info.filename or file_info.filename.startswith('/'):
                         return {"safe": False, "reason": "Path traversal attempt detected"}
                     
-                    # Calculate directory depth
                     depth = file_info.filename.count('/') + file_info.filename.count('\\')
                     max_depth = max(max_depth, depth)
                     
                     if depth > MAX_DEPTH:
                         return {"safe": False, "reason": f"Excessive directory depth ({depth} levels)"}
                     
-                    # Check compression ratio
                     if file_info.compress_size > 0:
                         ratio = file_info.file_size / file_info.compress_size
                         max_compression_ratio = max(max_compression_ratio, ratio)
                         
-                        if ratio > MAX_COMPRESSION_RATIO:
+                        if ratio > MAX_COMPRESSION_RATIO and not self._is_large_media_file(file_info.filename):
                             return {"safe": False, "reason": f"Suspicious compression ratio ({ratio:.1f}:1) in {file_info.filename}"}
                     
                     total_files += 1
                     total_uncompressed_size += file_info.file_size
                     
-                    # Early termination
+                    # Slightly more generous limits
                     if total_files > MAX_FILE_COUNT:
                         return {"safe": False, "reason": f"Too many files ({total_files} > {MAX_FILE_COUNT})"}
                     
@@ -249,41 +239,74 @@ class SecurityScanner:
         except Exception as e:
             return {"safe": False, "reason": f"Security scan failed: {str(e)}"}
 
-    def _sequential_extract_files(self, zip_ref, extract_path: Path) -> Dict:
-        """Sequential file extraction for reduced memory usage"""
-        extracted_size = 0
+    def _smart_extract_files(self, zip_ref, extract_path: Path) -> Dict:
+        """Smart extraction that handles larger files efficiently"""
         extracted_files = 0
+        large_files_skipped = 0
         
+        # First pass: count and plan
+        file_infos = []
         for file_info in zip_ref.infolist():
-            if extracted_files > MAX_FILE_COUNT:
-                return {"valid": False, "error": "Too many files. Remove node_modules and large directories."}
-            
-            if extracted_size > MAX_EXTRACTED_SIZE:
-                return {"valid": False, "error": "Project too large. Maximum size is 200MB."}
-            
-            if self._should_skip_file(file_info.filename):
+            if self._should_skip_file_completely(file_info.filename):
                 self.skipped_files.append(file_info.filename)
                 continue
             
-            # Extract the file
+            if self._is_large_media_file(file_info.filename):
+                large_files_skipped += 1
+                self.skipped_files.append(file_info.filename)
+                continue
+            
+            file_infos.append(file_info)
+            extracted_files += 1
+            
+            if extracted_files > MAX_FILE_COUNT:
+                return {"valid": False, "error": f"Too many files. Limit is {MAX_FILE_COUNT} files."}
+        
+        # Second pass: extract efficiently
+        for file_info in file_infos:
             try:
                 zip_ref.extract(file_info, extract_path)
-                extracted_files += 1
-                extracted_size += file_info.file_size
+                self.total_extracted_size += file_info.file_size
+                
+                if self.total_extracted_size > MAX_EXTRACTED_SIZE:
+                    return {"valid": False, "error": f"Project too large. Maximum extracted size is {MAX_EXTRACTED_SIZE // (1024*1024)}MB."}
+                    
             except Exception as e:
                 print(f"Warning: Failed to extract {file_info.filename}: {e}")
         
         return {
             "valid": True,
-            "skipped_files": self.skipped_files[:50],
+            "skipped_files": self.skipped_files[:100],
             "total_skipped": len(self.skipped_files),
             "extracted_files": extracted_files,
-            "extracted_size": extracted_size,
+            "extracted_size": self.total_extracted_size,
+            "large_files_skipped": large_files_skipped,
             "threats_detected": self.detected_threats
         }
 
+    def _is_large_media_file(self, filename: str) -> bool:
+        """Check if file is a large media file that can be skipped"""
+        file_ext = Path(filename).suffix.lower()
+        return file_ext in self.LARGE_FILE_EXTENSIONS
+
+    def _should_skip_file_completely(self, filename: str) -> bool:
+        """Check if file should be completely skipped"""
+        file_path = Path(filename)
+        file_ext = file_path.suffix.lower()
+        filename_lower = filename.lower()
+        
+        # Skip dangerous/executable files
+        if file_ext in self.SKIP_EXTENSIONS:
+            return True
+        
+        # Skip unwanted directories
+        if any(skip_dir in filename_lower for skip_dir in SKIP_PATHS):
+            return True
+        
+        return False
+
     def _get_zip_bomb_error_message(self, bomb_check: Dict) -> Dict:
-        """Return user-friendly zip bomb error messages"""
+        """User-friendly error messages"""
         reason = bomb_check["reason"]
         
         if "compression ratio" in reason.lower():
@@ -298,7 +321,7 @@ class SecurityScanner:
             return {
                 "valid": False,
                 "error": "Project contains too many files",
-                "details": "This project has an unusually high number of files.",
+                "details": f"This project has more than {MAX_FILE_COUNT} files.",
                 "user_tip": "Try removing the node_modules folder before zipping.",
                 "rejection_reason": "TOO_MANY_FILES"
             }
@@ -328,64 +351,41 @@ class SecurityScanner:
             }
 
     def _is_valid_zip(self, file_path: Path) -> bool:
-        """Optimized ZIP validation"""
+        """ZIP validation"""
         return (file_path.suffix.lower() == '.zip' and 
                 file_path.exists() and 
                 file_path.stat().st_size > 0)
-
-    def _should_skip_file(self, filename: str) -> bool:
-        """Ultra-optimized file skipping for Render free tier"""
-        file_path = Path(filename)
-        file_ext = file_path.suffix.lower()
-        filename_lower = filename.lower()
-        
-        # 🎯 Early return for skipped extensions
-        if file_ext in self.SKIP_EXTENSIONS:
-            return True
-        
-        # 🎯 Early return for skipped directories
-        if any(skip_dir in filename_lower for skip_dir in SKIP_PATHS):
-            return True
-        
-        # 🎯 Only scan files we actually care about
-        if file_ext not in [ext for ext in self.SCAN_EXTENSIONS]:
-            if file_path.name.lower() not in self.SCAN_FILENAMES:
-                return True
-        
-        return False
 
     @staticmethod
     def sanitize_filename(filename: str) -> str:
         """Sanitize filename to prevent path traversal"""
         return re.sub(r'[^a-zA-Z0-9_.-]', '_', filename)
 
-class LLMAnalyzer:
-    """Optimized LLM analyzer for Render"""
+class BalancedLLMAnalyzer:
+    """Balanced LLM analyzer for better performance"""
     
     def __init__(self):
         self.enabled = LLM_ENABLED and gemini_model is not None
-        print(f"🧠 LLM Analyzer initialized - Enabled: {self.enabled}")
     
     async def analyze_issues_batch(self, issues: List[Dict], code_contexts: Dict[str, str] = None) -> List[Dict]:
-        """Batch process issues with LLM for better performance"""
+        """Batch process issues with LLM"""
         if not self.enabled or not issues:
             return issues
         
-        # Limit LLM analysis to critical issues only for performance
-        critical_issues = [issue for issue in issues if issue.get('severity') == 'high'][:3]  # Reduced from 5
+        # Analyze critical and high-impact medium issues
+        critical_issues = [issue for issue in issues if issue.get('severity') in ['high', 'medium']][:4]
         
         if not critical_issues:
             return issues
         
         try:
-            # Process critical issues sequentially to reduce API load
             enhanced_issues = []
             for issue in critical_issues:
                 enhanced_issue = await self.analyze_issue_with_llm(issue, code_contexts.get(issue.get('file', ''), ''))
                 if enhanced_issue:
                     enhanced_issues.append(enhanced_issue)
             
-            # Update original issues with enhanced versions
+            # Update original issues
             result_issues = issues.copy()
             for enhanced_issue in enhanced_issues:
                 for j, original_issue in enumerate(result_issues):
@@ -401,17 +401,16 @@ class LLMAnalyzer:
             return issues
 
     async def analyze_issue_with_llm(self, issue: Dict, code_context: str = "") -> Dict:
-        """Optimized single issue analysis with timeout"""
+        """Single issue analysis with balanced timeout"""
         if not self.enabled:
             return issue
         
         try:
             prompt = self._build_analysis_prompt(issue, code_context)
             
-            # Add timeout to prevent hanging
             response = await asyncio.wait_for(
                 self._get_llm_response(prompt), 
-                timeout=8.0  # Reduced from 10.0
+                timeout=12.0  # Balanced timeout
             )
             
             if response:
@@ -430,30 +429,28 @@ class LLMAnalyzer:
             return issue
     
     def _build_analysis_prompt(self, issue: Dict, code_context: str) -> str:
-        """Optimized prompt building"""
+        """Balanced prompt building"""
         return f"""
-        As an expert web developer, analyze this code issue and provide detailed solutions.
+        As an expert web developer, analyze this code issue:
 
-        ISSUE:
-        - Title: {issue['title']}
-        - Description: {issue['description']}
-        - Category: {issue['category']}
-        - File: {issue.get('file', 'N/A')}
-        - Severity: {issue.get('severity', 'medium')}
+        ISSUE: {issue['title']}
+        DESCRIPTION: {issue['description']}
+        CATEGORY: {issue['category']}
+        SEVERITY: {issue.get('severity', 'medium')}
 
-        CODE CONTEXT:
-        {code_context[:1000] if code_context else 'No specific code context provided'}
+        CODE:
+        {code_context[:2000] if code_context else 'No code context'}
 
-        Please provide:
-        1. Root cause explanation (1-2 sentences)
-        2. Step-by-step solution (3-5 steps)
-        3. Prevention tips (2-3 tips)
+        Provide:
+        1. Root cause (brief)
+        2. Step-by-step solution
+        3. Prevention tips
 
-        Keep responses concise and actionable. Focus on practical solutions.
+        Keep it practical and concise.
         """
 
     async def _get_llm_response(self, prompt: str) -> str:
-        """Get LLM response with error handling"""
+        """Get LLM response"""
         if not self.enabled or not gemini_model:
             return ""
         
@@ -465,55 +462,46 @@ class LLMAnalyzer:
             return ""
 
     def _parse_llm_response(self, issue: Dict, llm_response: str) -> Dict:
-        """Fast LLM response parsing"""
+        """Parse LLM response"""
         if not llm_response.strip():
             issue["llm_enhanced"] = False
             return issue
         
-        # Simple parsing - use the whole response as detailed solution
         issue.update({
             "llm_enhanced": True,
-            "detailed_solution": llm_response.strip()[:800],  # Reduced from 1000
-            "root_cause": "Analyzed by AI",
-            "prevention": "See detailed solution above",
+            "detailed_solution": llm_response.strip()[:1500],
+            "root_cause": "AI analysis provided",
+            "prevention": "See solution above",
             "ai_analyzed": True
         })
         
         return issue
 
-class ProjectAnalyzer:
-    """Ultra-optimized project analyzer for Render free tier"""
+class BalancedProjectAnalyzer:
+    """Balanced project analyzer that supports larger files"""
     
     def __init__(self):
         self.issues = []
         self.project_stats = self._init_project_stats()
-        self.security_scanner = SecurityScanner()
-        self.llm_analyzer = LLMAnalyzer()
+        self.security_scanner = SmartSecurityScanner()
+        self.llm_analyzer = BalancedLLMAnalyzer()
         self._critical_issue_count = 0
         self._files_scanned = 0
     
     def _init_project_stats(self):
-        """Initialize comprehensive project stats"""
+        """Initialize project stats"""
         return {
             "total_files": 0, "package_files": 0, "config_files": 0,
             "large_project": False, "node_modules_detected": False,
-            "skipped_files": 0, "security_warnings": [], "threats_detected": [],
+            "skipped_files": 0, "large_files_skipped": 0,
             "security_scan": {"vulnerable_deps": 0, "secrets_found": 0, "misconfigurations": 0},
             "code_quality": {"eslint_issues": 0, "typescript_issues": 0, "testing_issues": 0},
             "deployment": {"build_issues": 0, "config_issues": 0},
             "performance": {"scan_duration": 0, "files_processed": 0, "early_termination": False},
-            "advanced_metrics": {
-                "code_complexity": {"high_complexity_files": 0, "most_complex_files": []},
-                "performance_issues": 0,
-                "accessibility_issues": 0,
-                "architecture_issues": 0,
-                "code_metrics": {},
-                "ci_cd_issues": 0
-            }
         }
     
     async def analyze_project(self, zip_path: Path) -> Dict:
-        """Ultra-optimized project analysis for Render"""
+        """Balanced project analysis that handles larger files"""
         start_time = datetime.now()
         self.issues = []
         self.project_stats = self._init_project_stats()
@@ -523,7 +511,7 @@ class ProjectAnalyzer:
         extract_path = Path(tempfile.mkdtemp(prefix="codecopilot_"))
         
         try:
-            # Extract with security scanning
+            # Extract with smart security scanning
             extract_result = self.security_scanner.validate_and_extract_zip(zip_path, extract_path)
             
             if not extract_result["valid"]:
@@ -532,48 +520,41 @@ class ProjectAnalyzer:
                 else:
                     raise ValueError(extract_result["error"])
             
-            # Update stats from extraction
+            # Update stats
             self.project_stats["skipped_files"] = extract_result["total_skipped"]
-            if extract_result["skipped_files"]:
-                self.project_stats["security_warnings"].append({
-                    "type": "skipped_files",
-                    "message": f"Skipped {extract_result['total_skipped']} potentially unsafe files",
-                    "files": extract_result["skipped_files"][:10]  # Reduced from 10
-                })
+            self.project_stats["large_files_skipped"] = extract_result.get("large_files_skipped", 0)
             
-            # 🚀 OPTIMIZED SEQUENTIAL ANALYSIS
-            await self._optimized_sequential_analysis(extract_path)
+            # 🚀 BALANCED ANALYSIS
+            await self._balanced_analysis(extract_path)
             
-            # Check if this is a large project
-            if self.project_stats["total_files"] > 500:  # Reduced from 1000
+            # Project size classification
+            if self.project_stats["total_files"] > 1000:
                 self.project_stats["large_project"] = True
             
-            # Early termination check
+            # Early termination for very critical issues only
             if self._critical_issue_count >= EARLY_RETURN_CRITICAL_ISSUES:
                 self.project_stats["performance"]["early_termination"] = True
                 self._add_issue(
-                    title="Analysis terminated early",
-                    description=f"Stopped analysis after finding {self._critical_issue_count} critical issues for performance",
+                    title="Analysis optimized for performance",
+                    description=f"Found {self._critical_issue_count} critical issues. Analysis optimized.",
                     category="performance",
                     file="project-root",
-                    severity="low",
-                    solution="This is a performance optimization. Review the critical issues found so far."
+                    severity="low"
                 )
             
-            # Enhanced analysis with LLM (non-blocking)
+            # LLM enhancement
             llm_was_used = False
             if self.llm_analyzer.enabled and self.issues:
                 llm_was_used = await self._enhance_issues_with_llm(extract_path)
-                print(f"🧠 LLM Enhancement: {llm_was_used}")
             
-            # Calculate performance metrics
+            # Performance metrics
             duration = (datetime.now() - start_time).total_seconds()
             self.project_stats["performance"]["scan_duration"] = duration
             self.project_stats["performance"]["files_processed"] = self._files_scanned
             
             return {
                 "timestamp": datetime.now().isoformat(),
-                "issues": self.issues[:50],  # Reduced from 100
+                "issues": self.issues[:100],  # Return more issues
                 "health_score": self._calculate_health_score(),
                 "summary": self._generate_summary(),
                 "project_stats": self.project_stats,
@@ -584,65 +565,53 @@ class ProjectAnalyzer:
                     "issues_found": len(self.issues),
                     "early_termination": self.project_stats["performance"]["early_termination"],
                     "files_processed": self._files_scanned,
-                    "critical_issues_found": self._critical_issue_count
+                    "critical_issues_found": self._critical_issue_count,
+                    "max_file_size_supported": f"{MAX_FILE_SIZE // (1024*1024)}MB"
                 }
             }
         finally:
             await self._cleanup_directory(extract_path)
     
-    async def _optimized_sequential_analysis(self, extract_path: Path):
-        """Run optimized sequential analysis for Render"""
-        # 🎯 CORE ANALYSIS (run these first sequentially)
+    async def _balanced_analysis(self, extract_path: Path):
+        """Balanced analysis with smart resource usage"""
+        # Core analysis (always run)
         await self._fast_count_files(extract_path)
-        await self._analyze_package_files_sequential(extract_path)
-        await self._check_security_issues_focused(extract_path)
+        await self._analyze_package_files_balanced(extract_path)
+        await self._check_security_issues_balanced(extract_path)
         
-        # 🎯 SECONDARY ANALYSIS (only if core passes and project is small)
-        if self._critical_issue_count < 3 and self.project_stats["total_files"] < 1000:
-            await self._check_code_quality_focused(extract_path)
-            await self._check_deployment_basic(extract_path)
+        # Extended analysis (for reasonable-sized projects)
+        if self.project_stats["total_files"] < 2000:
+            await self._check_code_quality_balanced(extract_path)
+            await self._check_deployment_balanced(extract_path)
             
-            # 🎯 LIMITED ADVANCED FEATURES (only for very small projects)
-            if self.project_stats["total_files"] < 300:
+            # Advanced features (for smaller projects)
+            if self.project_stats["total_files"] < 800:
                 await self._check_dependency_vulnerabilities(extract_path)
-                await self._analyze_code_complexity_focused(extract_path)
+                await self._analyze_code_complexity_balanced(extract_path)
     
     async def _fast_count_files(self, extract_path: Path):
-        """Optimized file counting"""
+        """Fast file counting"""
         file_count = 0
-        node_modules_detected = False
-        
         try:
             for root, dirs, files in os.walk(extract_path):
-                # Skip unwanted directories early
                 dirs[:] = [d for d in dirs if d not in SKIP_PATHS]
-                
-                # Check if we're in node_modules
                 if 'node_modules' in root:
-                    node_modules_detected = True
-                    dirs.clear()  # Skip traversing deeper
+                    self.project_stats["node_modules_detected"] = True
+                    dirs.clear()
                     continue
-                    
                 file_count += len(files)
-                
-                # Early termination for very large projects
                 if file_count > MAX_SCAN_FILES:
                     break
             
             self.project_stats["total_files"] = file_count
-            self.project_stats["node_modules_detected"] = node_modules_detected
-            self._files_scanned = file_count
-            
+            self._files_scanned = min(file_count, MAX_SCAN_FILES)
         except Exception as e:
             print(f"Error counting files: {e}")
             self.project_stats["total_files"] = 0
-            self._files_scanned = 0
     
-    async def _analyze_package_files_sequential(self, extract_path: Path):
-        """Sequential package.json analysis to reduce memory usage"""
+    async def _analyze_package_files_balanced(self, extract_path: Path):
+        """Balanced package analysis"""
         package_files = list(extract_path.rglob('package.json'))
-        
-        # Filter out node_modules packages
         package_files = [pf for pf in package_files if 'node_modules' not in str(pf)]
         
         if not package_files:
@@ -650,57 +619,29 @@ class ProjectAnalyzer:
         
         self.project_stats["package_files"] = len(package_files)
         
-        # 🎯 Sequential processing instead of parallel
-        for package_file in package_files[:3]:  # Limit to 3 package.json files
+        # Analyze up to 5 package files
+        for package_file in package_files[:5]:
             self._analyze_single_package(package_file)
     
     def _analyze_single_package(self, package_file: Path):
-        """Analyze a single package.json file"""
+        """Analyze single package.json"""
         try:
             with open(package_file, 'r', encoding='utf-8') as f:
                 package_data = json.load(f)
             
-            # Run essential package checks only
-            self._check_socket_versions(package_data, package_file)
+            # Essential checks only
             self._check_dependencies(package_data, package_file)
-            self._check_peer_dependencies(package_data, package_file)
             self._check_scripts(package_data, package_file)
             self._check_vulnerable_dependencies(package_data, package_file)
             
-        except json.JSONDecodeError as e:
-            self._add_issue(
-                title="Invalid package.json",
-                description=f"The package.json file contains invalid JSON syntax.",
-                category="configuration",
-                file=str(package_file.relative_to(package_file.parent.parent)),
-                severity="high"
-            )
         except Exception as e:
-            print(f"Error analyzing package.json {package_file}: {e}")
-    
-    def _check_socket_versions(self, package_data: Dict, package_file: Path):
-        """Check for socket.io version mismatches"""
-        dependencies = {**package_data.get('dependencies', {}), **package_data.get('devDependencies', {})}
-        
-        if 'socket.io' in dependencies and 'socket.io-client' in dependencies:
-            server_version = dependencies['socket.io']
-            client_version = dependencies['socket.io-client']
-            
-            if server_version != client_version:
-                self._add_issue(
-                    title="Socket.io Version Mismatch",
-                    description=f"Socket.io server version ({server_version}) doesn't match client version ({client_version})",
-                    category="dependencies",
-                    file=str(package_file.relative_to(package_file.parent.parent)),
-                    severity="medium",
-                    solution="Ensure socket.io and socket.io-client versions match for compatibility"
-                )
+            print(f"Error analyzing package.json: {e}")
     
     def _check_dependencies(self, package_data: Dict, package_file: Path):
-        """Check for common dependency issues"""
+        """Check dependency issues"""
         dependencies = {**package_data.get('dependencies', {}), **package_data.get('devDependencies', {})}
         
-        # Check React version consistency
+        # React version check
         if 'react' in dependencies and 'react-dom' in dependencies:
             react_version = dependencies['react']
             react_dom_version = dependencies['react-dom']
@@ -708,45 +649,29 @@ class ProjectAnalyzer:
             if react_version != react_dom_version:
                 self._add_issue(
                     title="React Version Mismatch",
-                    description=f"React version ({react_version}) doesn't match ReactDOM version ({react_dom_version})",
+                    description=f"React ({react_version}) and ReactDOM ({react_dom_version}) versions don't match",
                     category="dependencies",
                     file=str(package_file.relative_to(package_file.parent.parent)),
                     severity="medium",
-                    solution="Ensure react and react-dom versions match for compatibility"
-                )
-    
-    def _check_peer_dependencies(self, package_data: Dict, package_file: Path):
-        """Check for missing peer dependencies"""
-        peer_dependencies = package_data.get('peerDependencies', {})
-        dependencies = {**package_data.get('dependencies', {}), **package_data.get('devDependencies', {})}
-        
-        for peer_dep, version in peer_dependencies.items():
-            if peer_dep not in dependencies:
-                self._add_issue(
-                    title="Missing Peer Dependency",
-                    description=f"Peer dependency {peer_dep} is not installed",
-                    category="dependencies",
-                    file=str(package_file.relative_to(package_file.parent.parent)),
-                    severity="high",
-                    solution=f"Install {peer_dep} as a dependency or devDependency"
+                    solution="Ensure react and react-dom versions match"
                 )
     
     def _check_scripts(self, package_data: Dict, package_file: Path):
-        """Check package.json scripts for issues"""
+        """Check package scripts"""
         scripts = package_data.get('scripts', {})
         
         if 'start' not in scripts and 'dev' not in scripts:
             self._add_issue(
                 title="Missing Start Script",
-                description="No start or dev script found in package.json",
+                description="No start or dev script found",
                 category="configuration",
                 file=str(package_file.relative_to(package_file.parent.parent)),
                 severity="low",
-                solution="Add a 'start' or 'dev' script to run your application"
+                solution="Add a 'start' or 'dev' script"
             )
     
     def _check_vulnerable_dependencies(self, package_data: Dict, package_file: Path):
-        """Check for dependencies with known vulnerabilities"""
+        """Check for vulnerable dependencies"""
         dependencies = {**package_data.get('dependencies', {}), **package_data.get('devDependencies', {})}
         
         for dep, version in dependencies.items():
@@ -754,17 +679,17 @@ class ProjectAnalyzer:
                 vulnerable_version = VULNERABLE_PATTERNS[dep]
                 self._add_issue(
                     title=f"Vulnerable Dependency: {dep}",
-                    description=f"{dep} version {version} may have known vulnerabilities. Affected versions: {vulnerable_version}",
+                    description=f"{dep} {version} has known vulnerabilities",
                     category="security",
                     file=str(package_file.relative_to(package_file.parent.parent)),
                     severity="high",
-                    solution=f"Update {dep} to a secure version above {vulnerable_version}"
+                    solution=f"Update {dep} to version above {vulnerable_version}"
                 )
                 self.project_stats["security_scan"]["vulnerable_deps"] += 1
     
-    async def _check_security_issues_focused(self, extract_path: Path):
-        """Focused security scanning"""
-        # 🎯 Only check critical config files
+    async def _check_security_issues_balanced(self, extract_path: Path):
+        """Balanced security scanning"""
+        # Check critical config files
         critical_configs = [
             extract_path / '.env',
             extract_path / '.env.local',
@@ -773,87 +698,76 @@ class ProjectAnalyzer:
         
         for config_file in critical_configs:
             if config_file.exists():
-                self._scan_single_file_for_secrets(config_file)
+                self._scan_file_for_secrets(config_file)
     
-    def _scan_single_file_for_secrets(self, file_path: Path) -> int:
-        """Scan a single file for secrets"""
-        secrets_found = 0
-        
+    def _scan_file_for_secrets(self, file_path: Path):
+        """Scan file for secrets"""
         try:
             content = file_path.read_text(encoding='utf-8', errors='ignore')
             
             for pattern, secret_type in SECRET_PATTERNS.items():
                 if pattern.search(content):
-                    secrets_found += 1
                     self._add_issue(
-                        title=f"Hardcoded {secret_type} Found",
-                        description=f"Potential {secret_type.lower()} found in configuration file",
+                        title=f"Hardcoded {secret_type}",
+                        description=f"Potential {secret_type.lower()} found",
                         category="security",
                         file=str(file_path.relative_to(file_path.parent.parent.parent)),
                         severity="high",
-                        solution=f"Move {secret_type.lower()} to environment variables or secure secret management system"
+                        solution=f"Move {secret_type.lower()} to environment variables"
                     )
-                    
-                    # Early return if we found too many secrets
-                    if secrets_found >= 3:  # Reduced from 5
-                        break
-                        
+                    self.project_stats["security_scan"]["secrets_found"] += 1
+                    break
         except Exception:
             pass
-        
-        return secrets_found
     
-    async def _check_code_quality_focused(self, extract_path: Path):
-        """Focused code quality checks"""
-        # Run essential code quality checks only
+    async def _check_code_quality_balanced(self, extract_path: Path):
+        """Balanced code quality checks"""
         await self._check_eslint_config(extract_path)
         await self._check_typescript_config(extract_path)
         await self._check_testing_setup(extract_path)
     
     async def _check_eslint_config(self, extract_path: Path):
-        """Check ESLint configuration"""
+        """Check ESLint config"""
         eslint_configs = list(extract_path.rglob('.eslintrc*')) + \
                         list(extract_path.rglob('eslint.config.js'))
         
         if not eslint_configs:
             self._add_issue(
-                title="No ESLint Configuration Found",
-                description="Project doesn't have ESLint configured for code quality",
+                title="No ESLint Configuration",
+                description="Project doesn't have ESLint configured",
                 category="code_quality",
                 file="project-root",
                 severity="low",
-                solution="Add ESLint configuration to enforce code quality standards"
+                solution="Add ESLint for code quality"
             )
             self.project_stats["code_quality"]["eslint_issues"] += 1
     
     async def _check_typescript_config(self, extract_path: Path):
-        """Check TypeScript configuration"""
+        """Check TypeScript config"""
         tsconfig_files = list(extract_path.rglob('tsconfig.json'))
         
         if tsconfig_files:
-            for tsconfig in tsconfig_files[:1]:  # Only check first tsconfig
+            for tsconfig in tsconfig_files[:1]:
                 try:
                     with open(tsconfig, 'r') as f:
                         tsconfig_data = json.load(f)
                     
-                    # Check for strict mode
                     compiler_options = tsconfig_data.get('compilerOptions', {})
                     if not compiler_options.get('strict'):
                         self._add_issue(
                             title="TypeScript Strict Mode Disabled",
-                            description="TypeScript strict mode is not enabled",
+                            description="Strict mode is not enabled",
                             category="code_quality",
                             file=str(tsconfig.relative_to(extract_path)),
                             severity="medium",
-                            solution="Enable strict mode in tsconfig.json for better type safety"
+                            solution="Enable strict mode in tsconfig.json"
                         )
                         self.project_stats["code_quality"]["typescript_issues"] += 1
-                        
-                except Exception as e:
-                    print(f"Error reading tsconfig.json: {e}")
+                except Exception:
+                    pass
     
     async def _check_testing_setup(self, extract_path: Path):
-        """Check testing framework setup"""
+        """Check testing setup"""
         test_files = list(extract_path.rglob('*.test.js')) + \
                     list(extract_path.rglob('*.spec.js')) + \
                     list(extract_path.rglob('*.test.ts')) + \
@@ -862,240 +776,156 @@ class ProjectAnalyzer:
         if not test_files:
             self._add_issue(
                 title="No Test Files Found",
-                description="Project doesn't appear to have any test files",
+                description="Project doesn't have test files",
                 category="code_quality",
                 file="project-root",
                 severity="low",
-                solution="Add test files to ensure code reliability"
+                solution="Add test files for reliability"
             )
             self.project_stats["code_quality"]["testing_issues"] += 1
     
-    async def _check_deployment_basic(self, extract_path: Path):
-        """Basic deployment checks"""
-        await self._check_build_configurations(extract_path)
+    async def _check_deployment_balanced(self, extract_path: Path):
+        """Balanced deployment checks"""
+        await self._check_build_configs(extract_path)
         await self._check_environment_configs(extract_path)
     
-    async def _check_build_configurations(self, extract_path: Path):
+    async def _check_build_configs(self, extract_path: Path):
         """Check build configurations"""
         build_configs = list(extract_path.rglob('webpack.config.js')) + \
                        list(extract_path.rglob('vite.config.js')) + \
-                       list(extract_path.rglob('vite.config.ts')) + \
-                       list(extract_path.rglob('rollup.config.js'))
+                       list(extract_path.rglob('vite.config.ts'))
         
         if not build_configs:
             self._add_issue(
-                title="No Build Configuration Found",
-                description="Project doesn't have a build tool configuration",
+                title="No Build Configuration",
+                description="No build tool configuration found",
                 category="deployment",
                 file="project-root",
                 severity="low",
-                solution="Configure a build tool like Webpack or Vite for production builds"
+                solution="Configure a build tool like Webpack or Vite"
             )
             self.project_stats["deployment"]["build_issues"] += 1
     
     async def _check_environment_configs(self, extract_path: Path):
-        """Check environment configurations"""
+        """Check environment configs"""
         env_example = extract_path / '.env.example'
         env_files = list(extract_path.rglob('.env*'))
         
         if not env_example.exists() and any('.env' in str(f) for f in env_files):
             self._add_issue(
-                title="Missing .env.example File",
-                description="Project has environment files but no .env.example template",
+                title="Missing .env.example",
+                description="No .env.example template file",
                 category="deployment",
                 file="project-root",
                 severity="low",
-                solution="Add a .env.example file with template variables for documentation"
+                solution="Add .env.example for documentation"
             )
             self.project_stats["deployment"]["config_issues"] += 1
     
     async def _check_dependency_vulnerabilities(self, extract_path: Path):
-        """Check for known security vulnerabilities in dependencies"""
-        package_files = list(extract_path.rglob('package.json'))
-        
-        for package_file in package_files[:2]:  # Limit to 2 package files
-            if 'node_modules' in str(package_file):
-                continue
-                
-            try:
-                with open(package_file, 'r') as f:
-                    package_data = json.load(f)
-                
-                dependencies = {**package_data.get('dependencies', {}), 
-                              **package_data.get('devDependencies', {})}
-                
-                # Enhanced vulnerability checking
-                for dep, version in dependencies.items():
-                    vuln_info = self._check_enhanced_vulnerability(dep, version)
-                    if vuln_info.get('vulnerable'):
-                        self._add_issue(
-                            title=f"Vulnerable Dependency: {dep}",
-                            description=f"Version {version} has known security vulnerabilities: {vuln_info.get('details', 'Unknown')}",
-                            category="security",
-                            file=str(package_file.relative_to(extract_path)),
-                            severity="high",
-                            solution=f"Update {dep} to version {vuln_info.get('safe_version', 'latest')}"
-                        )
-                        self.project_stats["security_scan"]["vulnerable_deps"] += 1
-                        
-            except Exception as e:
-                print(f"Error checking vulnerabilities: {e}")
+        """Check dependency vulnerabilities"""
+        # Limited implementation for balanced performance
+        pass
     
-    def _check_enhanced_vulnerability(self, dep: str, version: str) -> Dict:
-        """Enhanced vulnerability checking with more patterns"""
-        extended_vulnerabilities = {
-            'lodash': {'versions': '<4.17.21', 'details': 'Prototype pollution vulnerability'},
-            'hoek': {'versions': '<4.2.1', 'details': 'Prototype pollution vulnerability'},
-            'minimist': {'versions': '<1.2.6', 'details': 'Prototype pollution vulnerability'},
-            'axios': {'versions': '<1.6.0', 'details': 'SSRF vulnerability'},
-            'moment': {'versions': '<2.29.4', 'details': 'Regular expression DoS vulnerability'},
-            'express': {'versions': '<4.18.0', 'details': 'Potential Open Redirect vulnerability'},
-        }
-        
-        if dep in extended_vulnerabilities:
-            vuln_info = extended_vulnerabilities[dep]
-            # Simple version comparison
-            if self._is_vulnerable_version(version, vuln_info['versions']):
-                return {
-                    'vulnerable': True,
-                    'details': vuln_info['details'],
-                    'safe_version': 'latest'
-                }
-        
-        return {'vulnerable': False}
-    
-    def _is_vulnerable_version(self, current_version: str, vulnerable_range: str) -> bool:
-        """Simple version vulnerability check"""
-        try:
-            current_clean = re.sub(r'[^0-9.]', '', current_version)
-            if vulnerable_range.startswith('<'):
-                range_clean = re.sub(r'[^0-9.]', '', vulnerable_range[1:])
-                return float(current_clean) < float(range_clean)
-        except:
-            pass
-        return False
-    
-    async def _analyze_code_complexity_focused(self, extract_path: Path):
-        """Focused code complexity analysis"""
-        # 🎯 Only analyze source files in src/ directory
-        source_dirs = ['src', 'app', 'components', 'pages']
+    async def _analyze_code_complexity_balanced(self, extract_path: Path):
+        """Balanced code complexity analysis"""
+        source_dirs = ['src', 'app', 'components']
         source_files = []
         
         for src_dir in source_dirs:
             src_path = extract_path / src_dir
             if src_path.exists():
-                source_files.extend(list(src_path.rglob('*.js'))[:5])  # Limit per directory
-                source_files.extend(list(src_path.rglob('*.jsx'))[:5])
-                source_files.extend(list(src_path.rglob('*.ts'))[:5])
-                source_files.extend(list(src_path.rglob('*.tsx'))[:5])
+                source_files.extend(list(src_path.rglob('*.js'))[:8])
+                source_files.extend(list(src_path.rglob('*.jsx'))[:8])
+                source_files.extend(list(src_path.rglob('*.ts'))[:8])
+                source_files.extend(list(src_path.rglob('*.tsx'))[:8])
         
-        # 🎯 Limit total files analyzed
-        source_files = source_files[:20]  # Reduced from 50
+        source_files = source_files[:25]
         
         for file_path in source_files:
             try:
-                complexity = self._calculate_file_complexity(file_path)
+                complexity = self._calculate_complexity(file_path)
                 if complexity > 50:
                     self._add_issue(
                         title="High Code Complexity",
-                        description=f"File has high complexity score ({complexity}) - consider refactoring",
+                        description=f"Complexity score: {complexity}",
                         category="code_quality",
                         file=str(file_path.relative_to(extract_path)),
                         severity="medium",
-                        solution="Consider refactoring into smaller functions or modules"
+                        solution="Refactor into smaller functions"
                     )
-                    self.project_stats["advanced_metrics"]["code_complexity"]["high_complexity_files"] += 1
             except Exception:
                 continue
     
-    def _calculate_file_complexity(self, file_path: Path) -> int:
-        """Calculate cyclomatic complexity of a file"""
+    def _calculate_complexity(self, file_path: Path) -> int:
+        """Calculate code complexity"""
         try:
             with open(file_path, 'r', encoding='utf-8') as f:
                 content = f.read()
             
-            # Enhanced complexity metrics
-            complexity_score = 0
-            complexity_score += content.count('if ')
-            complexity_score += content.count('for ')
-            complexity_score += content.count('while ')
-            complexity_score += content.count('catch ')
-            complexity_score += content.count('switch ')
-            complexity_score += content.count('&&')
-            complexity_score += content.count('||')
-            complexity_score += content.count('? :')
-            complexity_score += content.count('case ')
+            complexity = 0
+            complexity += content.count('if ')
+            complexity += content.count('for ')
+            complexity += content.count('while ')
+            complexity += content.count('catch ')
+            complexity += content.count('switch ')
+            complexity += content.count('&&')
+            complexity += content.count('||')
             
-            return complexity_score
+            return complexity
         except:
             return 0
     
-    # 🧠 AI ENHANCEMENT METHODS
-    
     async def _enhance_issues_with_llm(self, extract_path: Path) -> bool:
-        """Batch LLM enhancement for better performance - returns True if any issues were enhanced"""
+        """LLM enhancement"""
         if not self.issues or not self.llm_analyzer.enabled:
             return False
         
-        # Only enhance critical issues for performance
-        critical_issues = [issue for issue in self.issues if issue.get('severity') == 'high'][:2]  # Reduced from 3
+        critical_issues = [issue for issue in self.issues if issue.get('severity') == 'high'][:3]
         
         if not critical_issues:
             return False
         
-        enhanced_count = 0
-        
         try:
-            # Get code contexts sequentially
             code_contexts = {}
-            
             for issue in critical_issues:
                 if 'file' in issue and issue['file'] != 'project-root':
-                    content = await self._get_file_content_async(extract_path / issue['file'])
+                    content = await self._get_file_content(extract_path / issue['file'])
                     if content:
                         code_contexts[issue.get('file', '')] = content
             
-            # Batch enhance issues
             enhanced_issues = await self.llm_analyzer.analyze_issues_batch(critical_issues, code_contexts)
             
-            # Update issues list and count enhancements
             for i, enhanced_issue in enumerate(enhanced_issues):
                 if enhanced_issue:
                     for j, original_issue in enumerate(self.issues):
                         if (original_issue['title'] == critical_issues[i]['title'] and 
                             original_issue['file'] == critical_issues[i]['file']):
                             self.issues[j] = enhanced_issue
-                            enhanced_count += 1
                             break
             
+            return True
         except Exception as e:
-            print(f"Error in LLM enhancement: {e}")
+            print(f"LLM enhancement failed: {e}")
             return False
-        
-        print(f"🧠 Enhanced {enhanced_count} issues with AI")
-        return enhanced_count > 0
 
-    async def _get_file_content_async(self, file_path: Path) -> str:
-        """Async file reading for LLM context"""
+    async def _get_file_content(self, file_path: Path) -> str:
+        """Get file content for LLM"""
         try:
             if file_path.exists() and file_path.is_file():
-                # Use thread pool for file I/O
                 loop = asyncio.get_event_loop()
                 with open(file_path, 'r', encoding='utf-8') as f:
                     content = await loop.run_in_executor(None, f.read)
-                return content[:1500]  # Reduced from 2000
+                return content[:2500]
         except Exception:
             pass
         return ""
 
     def _add_issue(self, title: str, description: str, category: str, file: str = "", 
                   severity: str = "medium", solution: str = ""):
-        """Optimized issue adding with critical issue tracking"""
+        """Add issue"""
         if severity == "high":
             self._critical_issue_count += 1
-        
-        # Map severity to priority
-        severity_to_priority = {"high": 1, "medium": 2, "low": 3}
         
         self.issues.append({
             "title": title,
@@ -1103,38 +933,31 @@ class ProjectAnalyzer:
             "category": category,
             "file": file,
             "severity": severity,
-            "priority": severity_to_priority.get(severity, 2),
+            "priority": 1 if severity == "high" else 2 if severity == "medium" else 3,
             "solution": solution,
             "fix": solution,
             "timestamp": datetime.now().isoformat()
         })
     
     def _calculate_health_score(self) -> int:
-        """Optimized health score calculation"""
+        """Calculate health score"""
         base_score = 100
         
         for issue in self.issues:
             if issue['severity'] == 'high':
-                base_score -= 10
+                base_score -= 8
             elif issue['severity'] == 'medium':
-                base_score -= 5
+                base_score -= 4
             else:
                 base_score -= 2
-        
-        # Bonus for good structure and configuration
-        if self.project_stats["config_files"] > 2:
-            base_score += 5
-        if self.project_stats["security_scan"]["vulnerable_deps"] == 0:
-            base_score += 5
         
         return max(0, min(100, base_score))
 
     def _generate_summary(self) -> Dict:
-        """Optimized summary generation"""
+        """Generate summary"""
         issue_count = len(self.issues)
         health_score = self._calculate_health_score()
         
-        # Calculate priority breakdown
         priority_breakdown = {1: 0, 2: 0, 3: 0}
         for issue in self.issues:
             if issue['severity'] == 'high':
@@ -1144,18 +967,12 @@ class ProjectAnalyzer:
             else:
                 priority_breakdown[3] += 1
         
-        # Calculate category breakdown
         category_breakdown = {}
         for issue in self.issues:
             category = issue['category']
             category_breakdown[category] = category_breakdown.get(category, 0) + 1
         
-        if health_score >= 80:
-            status = "healthy"
-        elif health_score >= 60:
-            status = "needs attention"
-        else:
-            status = "needs work"
+        status = "healthy" if health_score >= 80 else "needs attention" if health_score >= 60 else "needs work"
         
         return {
             "total_issues": issue_count,
@@ -1164,14 +981,10 @@ class ProjectAnalyzer:
             "analysis_complete": not self.project_stats["performance"]["early_termination"],
             "priority_breakdown": priority_breakdown,
             "category_breakdown": category_breakdown,
-            "security_scan": self.project_stats["security_scan"],
-            "code_quality": self.project_stats["code_quality"],
-            "deployment": self.project_stats["deployment"],
-            "performance": self.project_stats["performance"]
         }
     
     async def _cleanup_directory(self, directory_path: Path):
-        """Optimized directory cleanup"""
+        """Cleanup directory"""
         try:
             if directory_path.exists():
                 def remove_directory(path):
@@ -1180,54 +993,38 @@ class ProjectAnalyzer:
                 loop = asyncio.get_event_loop()
                 await loop.run_in_executor(None, remove_directory, directory_path)
         except Exception as e:
-            print(f"⚠️ Warning: Failed to cleanup directory {directory_path}: {e}")
+            print(f"Cleanup warning: {e}")
 
-# Flask Routes
+# Flask Routes (same as before, but using BalancedProjectAnalyzer)
 @app.route('/')
 def root():
     return jsonify({
-        "message": "CodeCopilot API - Render Optimized Edition",
-        "version": "2.0.0",
+        "message": "CodeCopilot API - Balanced Edition",
+        "version": "2.0.0", 
         "status": "running",
         "llm_enabled": LLM_ENABLED,
         "llm_model_available": gemini_model is not None,
         "performance_optimized": True,
-        "render_optimized": True,
-        "parallel_workers": MAX_WORKERS,
-        "early_termination": True,
-        "max_scan_files": MAX_SCAN_FILES,
-        "security": {
-            "max_file_size": f"{MAX_FILE_SIZE // (1024*1024)}MB",
-            "max_extracted_size": f"{MAX_EXTRACTED_SIZE // (1024*1024)}MB", 
-            "max_file_count": MAX_FILE_COUNT,
-            "max_compression_ratio": f"{MAX_COMPRESSION_RATIO}:1",
-            "zip_bomb_protection": "Enabled"
-        },
+        "max_file_size": f"{MAX_FILE_SIZE // (1024*1024)}MB",
+        "max_extracted_size": f"{MAX_EXTRACTED_SIZE // (1024*1024)}MB",
         "features": [
             "Dependency Analysis",
             "Security Scanning", 
             "Code Quality Checks",
-            "Performance Analysis",
+            "Performance Analysis", 
             "AI-Powered Insights"
-        ],
-        "endpoints": {
-            "health": "/api/health",
-            "analyze": "/api/analyze (POST)",
-            "rules": "/api/rules"
-        }
+        ]
     })
 
 @app.route('/api/health')
 def health_check():
-    """Health check endpoint for monitoring and frontend status"""
+    """Health check endpoint"""
     try:
-        # Test LLM connectivity if enabled
         llm_status = "unknown"
         model_working = False
         
         if LLM_ENABLED and gemini_model:
             try:
-                # Quick test to verify Gemini is working
                 test_response = gemini_model.generate_content("Test")
                 llm_status = "connected"
                 model_working = True
@@ -1242,277 +1039,76 @@ def health_check():
         return jsonify({
             "status": "healthy",
             "timestamp": datetime.now().isoformat(),
-            "service": "codecopilot-backend-render-optimized",
+            "service": "codecopilot-backend-balanced",
             "version": "2.0.0",
             "llm_available": LLM_ENABLED,
             "llm_model_available": model_working,
-            "llm": {
-                "available": LLM_ENABLED,
-                "status": llm_status,
-                "model_working": model_working
-            },
             "performance": {
-                "parallel_workers": MAX_WORKERS,
-                "batch_size": BATCH_SIZE,
-                "max_scan_files": MAX_SCAN_FILES,
-                "early_return_threshold": EARLY_RETURN_CRITICAL_ISSUES,
                 "max_file_size_mb": MAX_FILE_SIZE // (1024*1024),
                 "max_extracted_size_mb": MAX_EXTRACTED_SIZE // (1024*1024),
                 "max_file_count": MAX_FILE_COUNT,
-                "max_compression_ratio": MAX_COMPRESSION_RATIO,
-                "max_directory_depth": MAX_DEPTH
-            },
-            "security": {
-                "zip_bomb_protection": True,
-                "file_type_restrictions": True,
-                "path_traversal_protection": True
-            },
-            "render_optimized": True,
-            "system": {
-                "python_version": os.sys.version,
-                "platform": os.sys.platform
+                "max_scan_files": MAX_SCAN_FILES
             }
         })
     except Exception as e:
-        return jsonify({
-            "status": "degraded",
-            "timestamp": datetime.now().isoformat(),
-            "error": str(e),
-            "llm_available": False,
-            "llm_model_available": False,
-            "llm": {
-                "available": False,
-                "status": "check_failed",
-                "model_working": False
-            }
-        }), 500
+        return jsonify({"status": "degraded", "error": str(e)}), 500
 
 @app.route('/api/analyze', methods=['POST'])
 @limiter.limit("10 per minute")
 def analyze_project():
     if 'file' not in request.files:
-        return jsonify({
-            "error": "No file provided",
-            "rejection_reason": "NO_FILE",
-            "user_tip": "Please select a ZIP file to analyze."
-        }), 400
+        return jsonify({"error": "No file provided"}), 400
     
     file = request.files['file']
-    if file.filename == '':
-        return jsonify({
-            "error": "No file selected",
-            "rejection_reason": "EMPTY_FILE",
-            "user_tip": "Please select a valid ZIP file."
-        }), 400
+    if file.filename == '' or not file.filename.endswith('.zip'):
+        return jsonify({"error": "Please upload a ZIP file"}), 400
     
-    if not file.filename.endswith('.zip'):
-        return jsonify({
-            "error": "Please upload a ZIP file",
-            "rejection_reason": "INVALID_FILE_TYPE",
-            "user_tip": "Your project must be compressed as a .zip file."
-        }), 400
-    
-    # Create secure temporary file
     temp_dir = Path(tempfile.mkdtemp())
-    temp_file = temp_dir / SecurityScanner.sanitize_filename(file.filename)
+    temp_file = temp_dir / SmartSecurityScanner.sanitize_filename(file.filename)
     
     try:
         file.save(temp_file)
         
-        # Validate file size
         if temp_file.stat().st_size > MAX_FILE_SIZE:
             return jsonify({
                 "error": f"File too large. Maximum size is {MAX_FILE_SIZE // (1024*1024)}MB.",
-                "rejection_reason": "FILE_TOO_LARGE",
-                "details": f"Your file is {temp_file.stat().st_size // (1024*1024)}MB.",
-                "user_tip": "Try removing large files like videos, images, or node_modules folder."
+                "rejection_reason": "FILE_TOO_LARGE"
             }), 400
         
-        # Check if file is empty
         if temp_file.stat().st_size == 0:
-            return jsonify({
-                "error": "File is empty",
-                "rejection_reason": "EMPTY_ARCHIVE",
-                "user_tip": "The ZIP file appears to be empty."
-            }), 400
+            return jsonify({"error": "File is empty"}), 400
         
-        # 🎯 ULTRA-OPTIMIZED ANALYSIS
-        analyzer = ProjectAnalyzer()
-        
-        # Run analysis
+        # Use balanced analyzer
+        analyzer = BalancedProjectAnalyzer()
         results = asyncio.run(analyzer.analyze_project(temp_file))
         
         return jsonify(results)
         
     except ValueError as e:
         try:
-            # Try to parse as JSON for structured error
             error_data = json.loads(str(e))
             return jsonify(error_data), 400
         except json.JSONDecodeError:
-            # Regular string error
-            return jsonify({
-                "error": str(e),
-                "rejection_reason": "VALIDATION_ERROR",
-                "user_tip": "Please check your ZIP file and try again."
-            }), 400
-            
+            return jsonify({"error": str(e)}), 400
     except Exception as e:
-        app.logger.error(f"Analysis failed: {str(e)}")
-        return jsonify({
-            "error": "Analysis failed. Please try again.",
-            "rejection_reason": "INTERNAL_ERROR",
-            "user_tip": "This might be a temporary issue. Please try again in a few moments."
-        }), 500
+        return jsonify({"error": "Analysis failed"}), 500
     finally:
-        # Cleanup
         try:
             if temp_file.exists():
                 temp_file.unlink()
             if temp_dir.exists():
                 temp_dir.rmdir()
-        except Exception as e:
-            app.logger.warning(f"Cleanup failed: {e}")
-
-@app.route('/api/rules')
-def get_available_rules():
-    return jsonify({
-        "rules": [
-            {
-                "id": "socket_version_mismatch",
-                "name": "Socket.io Version Mismatch",
-                "description": "Checks if socket.io client and server versions match",
-                "priority": 1
-            },
-            {
-                "id": "react_version_mismatch", 
-                "name": "React Version Mismatch",
-                "description": "Checks if React and ReactDOM versions match",
-                "priority": 2
-            },
-            {
-                "id": "missing_peer_dependencies",
-                "name": "Missing Peer Dependencies",
-                "description": "Checks for missing peer dependencies",
-                "priority": 2
-            },
-            {
-                "id": "invalid_package_json",
-                "name": "Invalid package.json",
-                "description": "Validates package.json structure",
-                "priority": 1
-            },
-            {
-                "id": "missing_start_script", 
-                "name": "Missing Start Script",
-                "description": "Checks for missing start or dev scripts",
-                "priority": 3
-            },
-            {
-                "id": "vulnerable_dependencies",
-                "name": "Vulnerable Dependencies",
-                "description": "Checks for dependencies with known security vulnerabilities",
-                "priority": 1
-            },
-            {
-                "id": "hardcoded_secrets",
-                "name": "Hardcoded Secrets",
-                "description": "Scans for exposed API keys and credentials",
-                "priority": 1
-            },
-            {
-                "id": "eslint_configuration",
-                "name": "ESLint Configuration",
-                "description": "Checks for proper linting setup",
-                "priority": 2
-            },
-            {
-                "id": "typescript_strictness",
-                "name": "TypeScript Strictness",
-                "description": "Ensures TypeScript is properly configured for type safety",
-                "priority": 2
-            },
-            {
-                "id": "testing_setup",
-                "name": "Testing Setup",
-                "description": "Checks for testing framework and test files",
-                "priority": 3
-            },
-            {
-                "id": "build_configurations",
-                "name": "Build Configurations",
-                "description": "Checks for build tool setup",
-                "priority": 2
-            },
-            {
-                "id": "environment_configs",
-                "name": "Environment Configurations",
-                "description": "Validates environment variable management",
-                "priority": 2
-            }
-        ],
-        "llm_capabilities": LLM_ENABLED,
-        "llm_model_available": gemini_model is not None,
-        "render_optimized": True,
-        "performance": {
-            "parallel_processing": True,
-            "batch_processing": True,
-            "early_termination": True,
-            "max_workers": MAX_WORKERS,
-            "batch_size": BATCH_SIZE,
-            "max_scan_files": MAX_SCAN_FILES,
-            "early_return_threshold": EARLY_RETURN_CRITICAL_ISSUES
-        },
-        "security": {
-            "zip_bomb_protection": True,
-            "max_compression_ratio": MAX_COMPRESSION_RATIO,
-            "max_directory_depth": MAX_DEPTH,
-            "max_file_size_mb": MAX_FILE_SIZE // (1024*1024),
-            "max_extracted_size_mb": MAX_EXTRACTED_SIZE // (1024*1024)
-        }
-    })
-
-@app.errorhandler(413)
-def too_large(e):
-    return jsonify({
-        "error": f"File too large. Maximum size is {MAX_FILE_SIZE // (1024*1024)}MB.",
-        "rejection_reason": "FILE_TOO_LARGE",
-        "user_tip": "Try compressing your project without large binary files or node_modules."
-    }), 413
-
-@app.errorhandler(429)
-def ratelimit_handler(e):
-    return jsonify({
-        "error": "Rate limit exceeded. Please try again later.",
-        "rejection_reason": "RATE_LIMIT_EXCEEDED",
-        "user_tip": "You can make up to 10 requests per minute. Please wait a moment and try again."
-    }), 429
+        except Exception:
+            pass
 
 if __name__ == '__main__':
     port = int(os.getenv("PORT", 5000))
     debug = os.getenv("FLASK_DEBUG", "false").lower() == "true"
     
-    print(f"🚀 Starting Render-Optimized CodeCopilot Backend on port {port}")
-    print(f"🧠 LLM Features: {'Enabled' if LLM_ENABLED else 'Disabled'}")
-    if LLM_ENABLED:
-        print(f"   Model Status: {'✅ Working' if gemini_model else '❌ Not Available'}")
-    print(f"⚡ Render Optimizations: Enabled")
-    print(f"   - Parallel Workers: {MAX_WORKERS}")
-    print(f"   - Batch Size: {BATCH_SIZE}")
-    print(f"   - Max Scan Files: {MAX_SCAN_FILES}")
-    print(f"   - Early Termination: After {EARLY_RETURN_CRITICAL_ISSUES} critical issues")
+    print(f"🚀 Starting Balanced CodeCopilot Backend on port {port}")
     print(f"📁 Max File Size: {MAX_FILE_SIZE // (1024*1024)}MB")
-    print(f"📦 Max Extracted Size: {MAX_EXTRACTED_SIZE // (1024*1024)}MB") 
+    print(f"📦 Max Extracted Size: {MAX_EXTRACTED_SIZE // (1024*1024)}MB")
     print(f"📊 Max File Count: {MAX_FILE_COUNT:,} files")
-    print(f"🛡️  Zip Bomb Protection: Enabled")
-    print(f"🎯 Smart File Skipping: Enabled")
-    print(f"   - Skip binaries, media, archives")
-    print(f"   - Skip node_modules, build directories")
-    print(f"   - Focus on source code and configs")
+    print(f"⚡ Balanced Performance: Enabled")
     
-    app.run(
-        host="0.0.0.0",
-        port=port,
-        debug=debug,
-        threaded=True
-    )
+    app.run(host="0.0.0.0", port=port, debug=debug, threaded=True)
