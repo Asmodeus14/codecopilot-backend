@@ -68,7 +68,7 @@ gemini_model = None
 if GEMINI_API_KEY and GEMINI_AVAILABLE:
     try:
         genai.configure(api_key=GEMINI_API_KEY)
-        model_names = ["gemini-2.0-flash-exp", "gemini-1.5-flash", "gemini-1.5-pro", "gemini-pro"]
+        model_names = ["gemini-2.0-flash", "gemini-1.5-flash", "gemini-1.5-pro", "gemini-pro"]
         
         for model_name in model_names:
             try:
