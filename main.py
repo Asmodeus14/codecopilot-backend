@@ -30,9 +30,9 @@ except ImportError:
 load_dotenv()
 
 # 🚀 REMOVE upload size limit - we'll handle everything in backend
-MAX_CLEANED_SIZE = 150 * 1024 * 1024  # 150MB after WE clean it
+MAX_CLEANED_SIZE = 500 * 1024 * 1024  # 500MB after WE clean it
 MAX_FILE_COUNT = 30000
-MAX_COMPRESSION_RATIO = 100
+MAX_COMPRESSION_RATIO = 20  # Allow reasonable compression
 MAX_DEPTH = 20
 
 # 🚀 PERFORMANCE SETTINGS
@@ -156,19 +156,36 @@ class AutoFileCleaner:
         self.removed_directories = []
         self.removed_files_count = 0
         self.original_size = 0
+        self.zip_file_size = 0  # Track original zip size for compression ratio
     
-    def auto_clean_project(self, extract_path: Path) -> Dict:
-        """Automatically clean the project - remove node_modules, etc."""
+    def auto_clean_project(self, extract_path: Path, zip_file_size: int = 0) -> Dict:
+        """Automatically clean the project with better compression handling"""
         self.cleaned_files_count = 0
         self.cleaned_size = 0
         self.removed_directories = []
         self.removed_files_count = 0
+        self.zip_file_size = zip_file_size
         
         try:
             # Calculate original size
             self.original_size = self._calculate_directory_size(extract_path)
             
             print(f"🔧 Starting auto-cleaning: {self.original_size // (1024*1024)}MB")
+            
+            # Check compression ratio if we have zip file size
+            if self.zip_file_size > 0:
+                compression_ratio = self.original_size / self.zip_file_size
+                print(f"📊 Compression ratio: {compression_ratio:.1f}x")
+                
+                if compression_ratio > MAX_COMPRESSION_RATIO:
+                    return {
+                        "success": False,
+                        "error": "High compression ratio detected",
+                        "details": f"File compresses {compression_ratio:.1f}x (limit: {MAX_COMPRESSION_RATIO}x)",
+                        "original_size_mb": self.original_size // (1024*1024),
+                        "zip_size_mb": self.zip_file_size // (1024*1024),
+                        "compression_ratio": round(compression_ratio, 1)
+                    }
             
             # Step 1: Remove entire directories we don't need
             self._auto_remove_directories(extract_path)
@@ -196,7 +213,8 @@ class AutoFileCleaner:
                     "max_size_mb": MAX_CLEANED_SIZE // (1024*1024),
                     "files_kept": self.cleaned_files_count,
                     "directories_removed": self.removed_directories[:5],  # Sample
-                    "removed_mb": (self.original_size - self.cleaned_size) // (1024*1024)
+                    "removed_mb": (self.original_size - self.cleaned_size) // (1024*1024),
+                    "compression_ratio": round(self.original_size / self.zip_file_size, 1) if self.zip_file_size > 0 else 0
                 }
             
             return {
@@ -207,6 +225,7 @@ class AutoFileCleaner:
                 "directories_removed": len(self.removed_directories),
                 "files_removed": self.removed_files_count,
                 "removed_mb": (self.original_size - self.cleaned_size) // (1024*1024),
+                "compression_ratio": round(self.original_size / self.zip_file_size, 1) if self.zip_file_size > 0 else 0,
                 "cleaning_performance": f"Removed {((self.original_size - self.cleaned_size) / self.original_size * 100):.1f}% of original size"
             }
             
@@ -407,8 +426,6 @@ class SmartZipExtractor:
         sanitized = re.sub(r'^/+|^\\+', '', sanitized)
         return sanitized
 
-# ... (Keep the LLMAnalyzer class from previous code - it doesn't change)
-
 class ComprehensiveLLMAnalyzer:
     """LLM analyzer for enhanced issue analysis"""
     
@@ -551,7 +568,7 @@ class AutoCleanProjectAnalyzer:
         }
     
     async def analyze_project(self, zip_path: Path) -> Dict:
-        """Analyze project with automatic backend cleaning"""
+        """Analyze project with automatic backend cleaning and compression detection"""
         start_time = datetime.now()
         self.issues = []
         self.project_stats = self._init_project_stats()
@@ -563,17 +580,24 @@ class AutoCleanProjectAnalyzer:
         try:
             print("🚀 Starting automatic project analysis...")
             
+            # Get zip file size for compression ratio detection
+            zip_file_size = zip_path.stat().st_size
+            
             # Step 1: Extract the ZIP file (any size)
             extract_result = self.zip_extractor.extract_any_size_zip(zip_path, extract_path)
             
             if not extract_result["valid"]:
                 return self._get_fallback_analysis(extract_result["error"])
             
-            # Step 2: AUTOMATICALLY clean files in backend
+            # Step 2: AUTOMATICALLY clean files in backend with compression detection
             print("🔧 Auto-cleaning files in backend...")
-            cleaning_result = self.file_cleaner.auto_clean_project(extract_path)
+            cleaning_result = self.file_cleaner.auto_clean_project(extract_path, zip_file_size)
             
             if not cleaning_result["success"]:
+                # Handle compression ratio errors
+                if "compression_ratio" in cleaning_result and cleaning_result["compression_ratio"] > MAX_COMPRESSION_RATIO:
+                    return self._get_compression_error_analysis(cleaning_result)
+                # Handle size exceeded errors
                 return self._get_size_exceeded_analysis(cleaning_result)
             
             # Add cleaning stats to project stats
@@ -610,7 +634,8 @@ class AutoCleanProjectAnalyzer:
                     "critical_issues_found": self._critical_issue_count,
                     "original_size_mb": cleaning_result["original_size_mb"],
                     "cleaned_size_mb": cleaning_result["cleaned_size_mb"],
-                    "auto_removed_mb": cleaning_result["removed_mb"]
+                    "auto_removed_mb": cleaning_result["removed_mb"],
+                    "compression_ratio": cleaning_result.get("compression_ratio", 0)
                 }
             }
             
@@ -618,6 +643,37 @@ class AutoCleanProjectAnalyzer:
             return self._get_error_analysis(str(e))
         finally:
             await self._cleanup_directory(extract_path)
+    
+    def _get_compression_error_analysis(self, cleaning_result: Dict) -> Dict:
+        """Return analysis when compression ratio is too high"""
+        self._add_issue(
+            title="High Compression Detected",
+            description=f"Project compresses {cleaning_result['compression_ratio']}x which exceeds our safety limits. This could indicate zip bombing or extreme compression.",
+            category="system",
+            severity="high",
+            solution="Try creating a new ZIP file with normal compression settings, or split your project into smaller parts."
+        )
+        
+        return {
+            "timestamp": datetime.now().isoformat(),
+            "issues": self.issues,
+            "health_score": 30,
+            "summary": self._generate_summary(),
+            "project_stats": {
+                "auto_cleaning_stats": cleaning_result,
+                "compression_ratio_exceeded": True
+            },
+            "llm_enhanced": False,
+            "llm_available": self.llm_analyzer.enabled,
+            "auto_cleaning": True,
+            "performance": {
+                "total_duration_seconds": 0,
+                "issues_found": len(self.issues),
+                "analysis_complete": False,
+                "compression_issue": True,
+                "compression_ratio": cleaning_result["compression_ratio"]
+            }
+        }
     
     def _get_size_exceeded_analysis(self, cleaning_result: Dict) -> Dict:
         """Return analysis when auto-cleaned size still exceeds limit"""
@@ -1068,7 +1124,8 @@ def root():
             "Auto-removes node_modules, .git, etc.",
             "Keeps package.json for dependency analysis", 
             "Comprehensive code analysis",
-            "AI-powered insights"
+            "AI-powered insights",
+            "Compression ratio detection for security"
         ]
     })
 
@@ -1102,6 +1159,7 @@ def health_check():
             "auto_cleaning": True,
             "limits": {
                 "max_cleaned_size_mb": MAX_CLEANED_SIZE // (1024*1024),
+                "max_compression_ratio": MAX_COMPRESSION_RATIO,
                 "auto_removes": ["node_modules", ".git", "dist", "build", "media files"]
             }
         })
@@ -1165,6 +1223,10 @@ def get_capabilities():
         "auto_cleaning": True,
         "process": "We automatically remove node_modules and non-essential files in our backend",
         "user_experience": "Just upload your project - we handle the cleaning automatically",
+        "limits": {
+            "max_cleaned_size_mb": MAX_CLEANED_SIZE // (1024*1024),
+            "max_compression_ratio": MAX_COMPRESSION_RATIO
+        },
         "what_we_auto_remove": {
             "directories": list(AUTO_REMOVE_DIRECTORIES),
             "file_types": list(AUTO_REMOVE_EXTENSIONS)
@@ -1176,9 +1238,9 @@ def get_capabilities():
         },
         "estimated_capacity": {
             "small_project": "5-50MB (works great)",
-            "medium_project": "50-500MB (works great)", 
-            "large_project": "500MB-2GB (usually works after auto-cleaning)",
-            "very_large_project": "2GB+ (may still be too large after auto-cleaning)"
+            "medium_project": "50-200MB (works great)", 
+            "large_project": "200MB-1GB (usually works after auto-cleaning)",
+            "very_large_project": "1GB+ (may still be too large after auto-cleaning)"
         }
     })
 
@@ -1199,5 +1261,6 @@ if __name__ == '__main__':
     print(f"📊 Auto-keeps: package.json, source code, config files for analysis")
     print(f"🧠 LLM Features: {'Enabled' if LLM_ENABLED else 'Disabled'}")
     print(f"⚡ Max cleaned size: {MAX_CLEANED_SIZE // (1024*1024)}MB")
+    print(f"🔒 Max compression ratio: {MAX_COMPRESSION_RATIO}x")
     
     app.run(host="0.0.0.0", port=port, debug=debug, threaded=True)
